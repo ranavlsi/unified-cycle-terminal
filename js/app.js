@@ -1,0 +1,1340 @@
+document.addEventListener('DOMContentLoaded', () => {
+    // 1. Tab Switching Logic
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabPanes = document.querySelectorAll('.tab-pane');
+
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Remove active classes
+            tabBtns.forEach(b => b.classList.remove('active'));
+            tabPanes.forEach(p => p.classList.remove('active'));
+            
+            // Activate target
+            btn.classList.add('active');
+            const targetId = btn.getAttribute('data-target');
+            document.getElementById(targetId).classList.add('active');
+
+            // Trigger redraw for SVG scaling if we have active data
+            if (activeHistoryData) {
+                // Determine engine types for the newly active pane
+                const targetPane = document.getElementById(targetId);
+                const containers = targetPane.querySelectorAll('.chart-container');
+                containers.forEach(container => {
+                    const engineType = container.getAttribute('data-engine') || 'legacy';
+                    drawDynamicChart(container.id || 'legacy-chart', activeHistoryData, engineType);
+                });
+            }
+        });
+    });
+
+    // 2. Double-Click & Zoom Button Setup for Fullscreen
+    const chartContainers = document.querySelectorAll('.chart-container');
+    const expandBtns = document.querySelectorAll('.btn-expand');
+    const modal = document.getElementById('expanded-modal');
+    const modalClose = document.getElementById('close-modal');
+    const modalContentArea = document.getElementById('modal-chart-content');
+    const modalTitle = document.getElementById('modal-title');
+
+    // Global Data State for Modal Re-Drawing
+    let activeTickerStr = '';
+    let activeHistoryData = null;
+    let zoomDomain = null; // [startIndex, endIndex]
+    let liveDataInterval = null;
+
+    // Reusable function to open modal
+    const openChartModal = (container) => {
+        if (!activeHistoryData) {
+            alert("Please search a ticker first to analyze.");
+            return;
+        }
+
+        const engineType = container.getAttribute('data-engine') || 'PATTERN';
+        
+        // Deep clone the entire container holding the SVG and axes
+        const activeChartNode = container.cloneNode(true);
+        activeChartNode.style.padding = '10px 55px 30px 10px'; // Keep axes padding
+        
+        // Find the title from the parent panel
+        const panel = container.closest('.engine-panel');
+        const titleEl = panel.querySelector('.panel-title');
+        const modalHeading = titleEl ? titleEl.textContent : `${engineType.toUpperCase()} ENGINE [FULL SCREEN]`;
+        
+        modalTitle.textContent = modalHeading;
+        modalContentArea.innerHTML = '';
+        activeChartNode.id = 'modal-expanded-chart';
+        modalContentArea.appendChild(activeChartNode);
+        modal.classList.add('active');
+
+        // Redraw to scale dynamically upon zoom if history exists
+        if (activeHistoryData) {
+            setTimeout(() => {
+                let currentHistory = activeHistoryData;
+                if (zoomDomain) {
+                    currentHistory = activeHistoryData.slice(zoomDomain[0], zoomDomain[1] + 1);
+                }
+
+                // Let flexbox compute the new space, then draw
+                drawDynamicChart('modal-expanded-chart', currentHistory, engineType);
+                
+                // Keep the target updated for elliott zoom
+                if (engineType === 'elliott') {
+                    const prices = currentHistory.map(d => d.price);
+                    const w5y = Math.max(...prices) * 1.05;
+                    const clonedTargetPrice = document.querySelector('#modal-expanded-chart #elliott-target-price');
+                    if (clonedTargetPrice) clonedTargetPrice.textContent = `$${(w5y*0.98).toFixed(2)} - $${(w5y*1.05).toFixed(2)}`;
+                }
+
+                if (engineType === 'legacy') {
+                    const updatedPatTitle = document.querySelector('#modal-expanded-chart #pattern-title-text-svg');
+                    if (updatedPatTitle) {
+                        const rawText = updatedPatTitle.getAttribute('data-raw-text') || 'PATTERN DETECTED';
+                        updatedPatTitle.textContent = `${activeTickerStr} ${rawText}`;
+                    }
+                }
+                
+                // Keep X Axes Synced in Modal
+                const modalWrapper = document.getElementById('modal-expanded-chart');
+                if (modalWrapper) {
+                     const yTicksX = modalWrapper.querySelector('.chart-x-axis');
+                     if(yTicksX) {
+                          const xTicks = [];
+                          for (let i = 0; i < 5; i++) {
+                              const idx = Math.floor(i * (currentHistory.length - 1) / 4);
+                              let t = currentHistory[idx].time;
+                              if (t < 10000000000) t *= 1000;
+                              const d = new Date(t);
+                              xTicks.push(d.toLocaleDateString(undefined, {year: '2-digit', month: 'short'}));
+                          }
+                          yTicksX.innerHTML = xTicks.map(val => `<div class="axis-tick">${val}</div>`).join('');
+                     }
+                }
+
+            }, 100); // Allow browser paint cycle to determine new active class flexbox width/height
+        }
+    };
+
+    chartContainers.forEach(container => {
+        container.addEventListener('dblclick', () => openChartModal(container));
+    });
+
+    expandBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const panel = btn.closest('.engine-panel');
+            if (panel) {
+                const container = panel.querySelector('.chart-container');
+                if (container) openChartModal(container);
+            }
+        });
+    });
+
+    // Close modal handlers
+    modalClose.addEventListener('click', () => {
+        modal.classList.remove('active');
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('active')) {
+            modal.classList.remove('active');
+        }
+    });
+
+    // 3. Live Data API Fetch (Yahoo Finance / Google News Simulation)
+    const searchInput = document.getElementById('tickerSearch');
+    const searchBtn = document.getElementById('btnSearch');
+    const liveTickerTrack = document.getElementById('live-ticker-track');
+    const newsFeed = document.getElementById('news-feed');
+
+    const fetchStockData = async (ticker) => {
+        try {
+            // Using local Python proxy to bypass CORS
+            const proxyUrl = `http://localhost:8000/api/stock?ticker=${ticker}`;
+            
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error('Proxy API Error');
+            const data = await res.json();
+            
+            const meta = data.chart.result[0].meta;
+            const currentPrice = meta.regularMarketPrice;
+            const prevClose = meta.chartPreviousClose;
+            const change = currentPrice - prevClose;
+            
+            const timestamps = data.chart.result[0].timestamp;
+            const closes = data.chart.result[0].indicators.quote[0].close;
+            
+            // Filter out nulls
+            const validData = [];
+            for (let i = 0; i < closes.length; i++) {
+                if (closes[i] !== null) {
+                    validData.push({ time: timestamps[i], price: closes[i] });
+                }
+            }
+
+            return { 
+                price: currentPrice.toFixed(2), 
+                change, 
+                changePercent: (change/prevClose*100).toFixed(2),
+                history: validData // Return the array for drawing
+            };
+        } catch (e) {
+            console.error("Live API proxy failed:", e);
+            
+            // Fallback deterministic logic so the UI doesn't crash completely.
+            let seed = 0;
+            for (let i = 0; i < ticker.length; i++) seed += ticker.charCodeAt(i);
+            const p = (seed * 1.5) % 500 + 10; 
+            const c = (seed % 10) - 5;
+            
+            // Mock a 10-year array (2520 trading days roughly)
+            const mockHistory = [];
+            const now = Date.now();
+            let mockP = p * 0.5;
+            for(let i=0; i<2520; i++) {
+                mockP += (Math.random() - 0.48) * (p * 0.02);
+                mockHistory.push({ time: now - (2520-i)*86400000, price: mockP });
+            }
+
+            return { price: p.toFixed(2), change: c, changePercent: (c/p*100).toFixed(2), error: true, history: mockHistory };
+        }
+    };
+
+    const fetchGoogleNews = async (ticker) => {
+        try {
+            const proxyUrl = `http://localhost:8000/api/news?ticker=${ticker}`;
+            
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error('News proxy error');
+            const xmlText = await res.text();
+            if(!xmlText) throw new Error("Empty XML");
+
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+            const items = xmlDoc.querySelectorAll("item");
+            
+            let newsHtml = '';
+            for(let i=0; i < Math.min(3, items.length); i++) {
+                const title = items[i].querySelector("title").textContent;
+                const link = items[i].querySelector("link").textContent;
+                const pubDate = items[i].querySelector("pubDate").textContent;
+                // Clean date
+                const dateClean = new Date(pubDate).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+                
+                newsHtml += `
+                    <div class="news-item">
+                        <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:5px;">${dateClean} | <a href="${link}" target="_blank" style="color:var(--neon-cyan); text-decoration:none;">Read Source ↗</a></div>
+                        <strong>${title}</strong>
+                    </div>
+                `;
+            }
+            if(!newsHtml) newsHtml = `<div class="news-item">No recent news found for <span class="neon-cyan">${ticker}</span>.</div>`;
+            return newsHtml;
+        } catch (e) {
+            return `<div class="news-item" style="color:var(--neon-red);">Failed to load live news feed. Is proxy.py running?</div>`;
+        }
+    };
+
+    const fetchFundamentalData = async (ticker) => {
+        try {
+            const proxyUrl = `http://localhost:8000/api/fundamentals?ticker=${ticker}`;
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error('Fundamentals proxy error');
+            const data = await res.json();
+            // Validate the response has the expected shape before returning
+            if (data && data.quoteSummary && !data.quoteSummary.error) {
+                return data;
+            }
+            return null;
+        } catch (e) {
+            console.warn('Fundamental data fetch failed, using simulation fallback:', e);
+            return null;
+        }
+    };
+
+    const renderChartAxes = (ticker, price, history) => {
+        const p = parseFloat(price);
+        if (isNaN(p)) return;
+        
+        // Generate pseudo Y axis ticks centered around price
+        const yTicks = [
+            (p * 1.08).toFixed(2),
+            (p * 1.04).toFixed(2),
+            p.toFixed(2),
+            (p * 0.96).toFixed(2),
+            (p * 0.92).toFixed(2)
+        ];
+        
+        let xTicks = [];
+        if (history && history.length > 0) {
+            for (let i = 0; i < 5; i++) {
+                const idx = Math.floor(i * (history.length - 1) / 4);
+                let t = history[idx].time;
+                if (t < 10000000000) t *= 1000; // API returns seconds, mock uses ms
+                const d = new Date(t);
+                xTicks.push(d.toLocaleDateString(undefined, {year: '2-digit', month: 'short'}));
+            }
+        } else {
+            // Generate pseudo X axis ticks based on current time
+            const now = new Date();
+            for (let i = 4; i >= 0; i--) {
+                const d = new Date(now.getTime() - i * 60 * 60 * 1000); // Past hours
+                xTicks.push(d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}));
+            }
+        }
+        
+        document.querySelectorAll('.chart-y-axis').forEach(axis => {
+            axis.innerHTML = yTicks.map((val, idx) => 
+                `<div class="axis-tick ${idx === 2 ? 'highlight' : ''}">${val}</div>`
+            ).join('');
+        });
+        
+        document.querySelectorAll('.chart-x-axis').forEach(axis => {
+            axis.innerHTML = xTicks.map(val => 
+                `<div class="axis-tick">${val}</div>`
+            ).join('');
+        });
+    };
+
+    const recognizePattern = (history) => {
+        if (!history || history.length < 20) {
+            return { type: 'channel', text: 'TREND CHANNEL', desc: 'Consolidation phase detected' };
+        }
+        
+        const prices = history.map(d => d.price);
+        const minP = Math.min(...prices);
+        const maxP = Math.max(...prices);
+        const range = maxP - minP;
+
+        // Peak/trough detection
+        const peaks = [];
+        const troughs = [];
+        const windowSize = 5;
+        
+        for (let i = windowSize; i < prices.length - windowSize; i++) {
+            let isPeak = true;
+            let isTrough = true;
+            for (let j = i - windowSize; j <= i + windowSize; j++) {
+                if (prices[j] > prices[i]) isPeak = false;
+                if (prices[j] < prices[i]) isTrough = false;
+            }
+            if (isPeak) peaks.push({ index: i, price: prices[i] });
+            if (isTrough) troughs.push({ index: i, price: prices[i] });
+        }
+
+        const recentPeaks = peaks.filter(p => p.index > prices.length - 100);
+        const recentTroughs = troughs.filter(t => t.index > prices.length - 100);
+
+        if (recentPeaks.length >= 3) {
+            const p1 = recentPeaks[recentPeaks.length - 3];
+            const p2 = recentPeaks[recentPeaks.length - 2];
+            const p3 = recentPeaks[recentPeaks.length - 1];
+            
+            if (p2.price > p1.price && p2.price > p3.price && Math.abs(p1.price - p3.price) < range * 0.1) {
+                return { type: 'head_shoulders', text: 'HEAD & SHOULDERS', desc: 'Neckline Breakdown Expected' };
+            }
+        }
+
+        if (recentPeaks.length >= 2) {
+            const p1 = recentPeaks[recentPeaks.length - 2];
+            const p2 = recentPeaks[recentPeaks.length - 1];
+            if (Math.abs(p1.price - p2.price) < range * 0.05 && (maxP - p1.price) < range * 0.2) {
+                return { type: 'double_top', text: 'DOUBLE TOP', desc: 'Resistance Rejection Detected', resistance: (p1.price + p2.price) / 2 };
+            }
+        }
+
+        if (recentTroughs.length >= 2) {
+            const t1 = recentTroughs[recentTroughs.length - 2];
+            const t2 = recentTroughs[recentTroughs.length - 1];
+            if (Math.abs(t1.price - t2.price) < range * 0.05 && (t1.price - minP) < range * 0.2) {
+                return { type: 'double_bottom', text: 'DOUBLE BOTTOM', desc: 'Support Base Found', support: (t1.price + t2.price) / 2 };
+            }
+        }
+
+        if (recentPeaks.length >= 2 && recentTroughs.length >= 2) {
+             const p1 = recentPeaks[recentPeaks.length - 2];
+             const p2 = recentPeaks[recentPeaks.length - 1];
+             const t1 = recentTroughs[recentTroughs.length - 2];
+             const t2 = recentTroughs[recentTroughs.length - 1];
+             
+             if (Math.abs(p1.price - p2.price) < range * 0.05 && t2.price > t1.price) {
+                  return { type: 'ascending_triangle', text: 'ASCENDING TRIANGLE', desc: 'Bullish Continuation Setup', resistance: (p1.price + p2.price) / 2, supportStart: t1, supportEnd: t2 };
+             }
+        }
+
+        return { type: 'channel', text: 'TREND CHANNEL', desc: 'Consolidation Phase', res: maxP - range * 0.1, sup: minP + range * 0.1 };
+    };
+
+    const drawDynamicChart = (containerId, history, engineType) => {
+        const svg = document.querySelector(`#${containerId} svg`);
+        if (!svg || !history || history.length === 0) return;
+
+        // Clear existing SVG paths/labels
+        svg.innerHTML = '';
+
+        const width = svg.clientWidth || 500;
+        const height = svg.clientHeight || 250;
+        const padding = 20;
+
+        const prices = history.map(d => d.price);
+        const minPrice = Math.min(...prices) * 0.95; // 5% buffer bottom
+        const maxPrice = Math.max(...prices) * 1.05; // 5% buffer top
+        
+        // Math scalers
+        const scaleX = (idx) => padding + (idx / (history.length - 1)) * (width - padding * 2);
+        const scaleY = (val) => height - padding - ((val - minPrice) / (maxPrice - minPrice)) * (height - padding * 2);
+
+        // 1. Draw standard historical price line
+        let pathD = `M ${scaleX(0)},${scaleY(prices[0])}`;
+        for (let i = 1; i < prices.length; i++) {
+            pathD += ` L ${scaleX(i)},${scaleY(prices[i])}`;
+        }
+        
+        const pricePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        pricePath.setAttribute('d', pathD);
+        pricePath.setAttribute('fill', 'none');
+
+        // Style based on engine
+        if (engineType === 'gann') {
+            pricePath.setAttribute('class', 'gann-price');
+            pricePath.setAttribute('stroke', 'var(--text-main)');
+            pricePath.setAttribute('stroke-width', '2');
+            
+            // Find absolute low in the visible history to anchor the fan
+            let anchorIdx = 0;
+            let anchorVal = prices[0];
+            for (let i = 1; i < prices.length; i++) {
+                if (prices[i] < anchorVal) { anchorVal = prices[i]; anchorIdx = i; }
+            }
+            
+            // Gann Vectors: Overlay simple fans from the lowest point to top right
+            const fanAngles = [0.25, 0.5, 1, 2, 4];
+            const fanLabels = ['8x1', '4x1', '2x1', '1x1', '1x2'];
+            
+            const startX = scaleX(anchorIdx);
+            const startY = scaleY(anchorVal);
+            
+            fanAngles.forEach((ratio, idx) => {
+                const f = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                f.setAttribute('x1', startX);
+                f.setAttribute('y1', startY);
+                // Extend out based on ratio, limiting to chart boundaries
+                const endX = width;
+                const endY = startY - ((width - startX) * ratio * ((maxPrice - minPrice) / width) * 2); 
+                // Fallback math if angles go wild
+                const safeEndY = Math.max(0, Math.min(height, endY));
+
+                f.setAttribute('x2', endX);
+                f.setAttribute('y2', safeEndY);
+                f.setAttribute('class', 'gann-fan');
+                f.setAttribute('stroke', 'var(--neon-cyan)');
+                svg.appendChild(f);
+                
+                // Add labels mapped to the fan line extremity
+                const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                txt.setAttribute('x', endX - 25);
+                txt.setAttribute('y', safeEndY > 10 ? safeEndY - 5 : 15);
+                txt.setAttribute('fill', 'var(--neon-cyan)');
+                txt.setAttribute('font-size', '0.65rem');
+                txt.textContent = fanLabels[idx];
+                svg.appendChild(txt);
+            });
+
+            // Re-add squaring dot and Square of Nine Box mapped to a recent high
+            let highIdx = anchorIdx;
+            let highVal = anchorVal;
+            for (let i = anchorIdx; i < prices.length; i++) {
+                if (prices[i] > highVal) { highVal = prices[i]; highIdx = i; }
+            }
+            
+            const cx = scaleX(highIdx);
+            const cy = scaleY(highVal);
+            const boxW = width * 0.2;
+            const boxH = height * 0.3;
+            
+            const sqBoxHtml = `
+                <rect x="${cx - boxW/2}" y="${cy - boxH/2}" width="${boxW}" height="${boxH}" fill="rgba(0,255,0,0.05)" stroke="var(--neon-green)" stroke-width="1" stroke-dasharray="2,2"/>
+                <circle cx="${cx}" cy="${cy}" r="10" class="gann-intersection pulse" />
+                <text x="${cx}" y="${cy - boxH/2 - 10}" fill="var(--neon-green)" font-size="0.7rem" text-anchor="middle">Time/Price Squared</text>
+            `;
+            svg.innerHTML += sqBoxHtml;
+            svg.appendChild(pricePath);
+
+        } else if (engineType === 'hurst') {
+            pricePath.setAttribute('class', 'price-line');
+            
+            // Calculate a simple Moving Average for Envelopes
+            const ma = [];
+            const period = Math.max(5, Math.floor(prices.length * 0.1));
+            for (let i = 0; i < prices.length; i++) {
+                if (i < period) {
+                    ma.push(prices[i]);
+                } else {
+                    let sum = 0;
+                    for (let j = i - period; j < i; j++) sum += prices[j];
+                    ma.push(sum / period);
+                }
+            }
+
+            // Draw Hurst Envelopes mapping volatility/range
+            const envOffset = (maxPrice - minPrice) * 0.15; 
+            
+            let envUpD = `M ${scaleX(0)},${scaleY(ma[0] + envOffset)}`;
+            let envDnD = `M ${scaleX(0)},${scaleY(ma[0] - envOffset)}`;
+            
+            for (let i = 1; i < ma.length; i++) {
+                envUpD += ` L ${scaleX(i)},${scaleY(ma[i] + envOffset)}`;
+                envDnD += ` L ${scaleX(i)},${scaleY(ma[i] - envOffset)}`;
+            }
+            
+            const envUp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            envUp.setAttribute('d', envUpD);
+            envUp.setAttribute('class', 'envelope-line');
+            envUp.setAttribute('fill', 'none');
+            
+            const envDn = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            envDn.setAttribute('d', envDnD);
+            envDn.setAttribute('class', 'envelope-line');
+            envDn.setAttribute('fill', 'none');
+            
+            // Add a smoothed FLD (Forward Line of Demarcation) shifted forward
+            const shift = Math.floor(prices.length * 0.1); 
+            let fldD = `M ${scaleX(shift)},${scaleY(prices[0])}`;
+            for (let i = 1; i < prices.length - shift; i++) {
+                fldD += ` L ${scaleX(i+shift)},${scaleY(prices[i])}`;
+            }
+            const fldPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            fldPath.setAttribute('d', fldD);
+            fldPath.setAttribute('class', 'fld-line neon-pink');
+            fldPath.setAttribute('stroke', 'var(--neon-pink)');
+            fldPath.setAttribute('stroke-width', '2');
+            fldPath.setAttribute('fill', 'none');
+            
+            svg.appendChild(envUp);
+            svg.appendChild(envDn);
+            svg.appendChild(pricePath);
+            svg.appendChild(fldPath);
+
+        } else if (engineType === 'elliott') {
+            pricePath.setAttribute('class', 'ew-historical op-low');
+            pricePath.setAttribute('stroke', 'var(--neon-cyan)');
+            pricePath.setAttribute('stroke-width', '2');
+            pricePath.setAttribute('opacity', '0.5');
+
+            // Find major pivots to draw mathematical Elliott 5-waves actively tracking real visible peaks
+            const len = prices.length;
+            
+            // For a Bullish 5-Wave count mapping:
+            let p0 = 0; 
+            let w0y = prices[p0];
+            // Find the absolute low in the first 20% to start the wave
+            for(let i=0; i < Math.floor(len * 0.2); i++) { if(prices[i] < w0y) { w0y = prices[i]; p0 = i;} }
+            
+            // Wave 1 Top (Max between start and 35%)
+            let p1 = p0 + 1; let w1y = prices[p1] || w0y;
+            for(let i = p1; i < Math.floor(len * 0.35); i++) { if(prices[i] > w1y) { w1y = prices[i]; p1 = i;} }
+            
+            // Wave 2 Bottom (Min between Wave 1 and 55%)
+            let p2 = p1 + 1; let w2y = prices[p2] || w0y;
+            for(let i = p2; i < Math.floor(len * 0.55); i++) { if(prices[i] < w2y) { w2y = prices[i]; p2 = i;} }
+            
+            // Rule 1: Wave 2 cannot go below start of Wave 1
+            if (w2y <= w0y) { w2y = w0y + (w1y - w0y) * 0.1; } // Retrace 90% at most
+
+            // Wave 3 Top (Max between Wave 2 and 80%)
+            let p3 = p2 + 1; let w3y = prices[p3] || w1y;
+            for(let i = p3; i < Math.floor(len * 0.80); i++) { if(prices[i] > w3y) { w3y = prices[i]; p3 = i;} }
+            
+            // Rule 2: Wave 3 cannot be shortest of waves 1, 3, 5 length.
+            const w1Len = w1y - w0y;
+            let w3Len = w3y - w2y;
+            if (w3Len <= w1Len) {
+                // Force Wave 3 to be at least slightly longer than Wave 1
+                w3y = w2y + w1Len * 1.1;
+                w3Len = w3y - w2y;
+            }
+
+            // Wave 4 Bottom (Min between Wave 3 and 95%)
+            let p4 = p3 + 1; let w4y = prices[p4] || w2y;
+            for(let i = p4; i < Math.floor(len * 0.95); i++) { if(prices[i] < w4y) { w4y = prices[i]; p4 = i;} }
+            
+            // Rule 3: Wave 4 cannot enter Wave 1 territority
+            if (w4y <= w1y) { w4y = w1y + w3Len * 0.2; } // Retrace 80% of Wave 3 at most
+
+            const p5 = len - 1;
+            // Rule 4: Wave 5 Target Projection
+            const w5y = w4y + w1Len * 0.618;
+            
+            // Primary Wave Path
+            const ew = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const ewD = `M ${scaleX(p0)},${scaleY(w0y)} L ${scaleX(p1)},${scaleY(w1y)} L ${scaleX(p2)},${scaleY(w2y)} L ${scaleX(p3)},${scaleY(w3y)} L ${scaleX(p4)},${scaleY(w4y)} L ${scaleX(p5)},${scaleY(w5y)}`;
+            ew.setAttribute('d', ewD);
+            ew.setAttribute('class', 'ew-primary');
+            ew.setAttribute('fill', 'none');
+
+            // Draw Subwaves internal to Wave III (between p2 and p3)
+            const sub = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const dx = (p3 - p2) / 5;
+            const dy = (w3y - w2y) / 5;
+            const subD = `
+                M ${scaleX(p2)},${scaleY(w2y)} 
+                L ${scaleX(p2 + dx)},${scaleY(w2y + dy*1.5)} 
+                L ${scaleX(p2 + dx*2)},${scaleY(w2y + dy*1.1)} 
+                L ${scaleX(p2 + dx*3.5)},${scaleY(w2y + dy*4)} 
+                L ${scaleX(p2 + dx*4.2)},${scaleY(w2y + dy*3.2)} 
+                L ${scaleX(p3)},${scaleY(w3y)}
+            `;
+            sub.setAttribute('d', subD);
+            sub.setAttribute('class', 'ew-alternate op-low'); // Repurpose class for subwave
+            sub.setAttribute('stroke', 'var(--neon-cyan)');
+            sub.setAttribute('fill', 'none');
+
+            // Add Alternate A-B-C Wave (Dashed)
+            const alt = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const altD = `
+                M ${scaleX(p3)},${scaleY(w3y)} 
+                L ${scaleX(p3 + dx*1.5)},${scaleY(w3y - dy*3)} 
+                L ${scaleX(p3 + dx*3)},${scaleY(w3y - dy*1.5)} 
+                L ${scaleX(p3 + dx*4.5)},${scaleY(w3y - dy*4)}
+            `;
+            alt.setAttribute('d', altD);
+            alt.setAttribute('class', 'ew-alternate');
+            alt.setAttribute('stroke', 'var(--neon-red)');
+            alt.setAttribute('stroke-dasharray', '4,4');
+            alt.setAttribute('stroke-width', '2');
+            alt.setAttribute('fill', 'none');
+
+            // Add Labels
+            const labelsHtml = `
+                <text x="${scaleX(p1)}" y="${scaleY(w1y)-10}" class="ew-label neon-cyan">(I)</text>
+                <text x="${scaleX(p2)}" y="${scaleY(w2y)+20}" class="ew-label neon-cyan">(II)</text>
+                <text x="${scaleX(p3)}" y="${scaleY(w3y)-10}" class="ew-label neon-cyan">(III)</text>
+                <text x="${scaleX(p4)}" y="${scaleY(w4y)+20}" class="ew-label neon-cyan">(IV)</text>
+                <text x="${scaleX(p5)}" y="${scaleY(w5y)-10}" class="ew-label neon-green">(V) Target</text>
+                
+                <text x="${scaleX(p2+dx)}" y="${scaleY(w2y+dy*1.5)-5}" fill="var(--neon-cyan)" font-size="0.6rem">i</text>
+                <text x="${scaleX(p2+dx*2)}" y="${scaleY(w2y+dy*1.1)+10}" fill="var(--neon-cyan)" font-size="0.6rem">ii</text>
+                <text x="${scaleX(p2+dx*3.5)}" y="${scaleY(w2y+dy*4)-5}" fill="var(--neon-cyan)" font-size="0.6rem">iii</text>
+                <text x="${scaleX(p2+dx*4.2)}" y="${scaleY(w2y+dy*3.2)+10}" fill="var(--neon-cyan)" font-size="0.6rem">iv</text>
+                
+                <text x="${scaleX(p3 + dx*1.5)}" y="${scaleY(w3y - dy*3)+15}" fill="var(--neon-red)" font-size="0.75rem">Alt A</text>
+                <text x="${scaleX(p3 + dx*3)}" y="${scaleY(w3y - dy*1.5)-10}" fill="var(--neon-red)" font-size="0.75rem">Alt B</text>
+                <text x="${scaleX(p3 + dx*4.5)}" y="${scaleY(w3y - dy*4)+15}" fill="var(--neon-red)" font-size="0.75rem">Alt C</text>
+            `;
+            
+            svg.appendChild(sub);
+            svg.appendChild(alt);
+            svg.appendChild(ew);
+            svg.innerHTML += labelsHtml;
+
+            // Update DOM with dynamic Elliott Fibonacci target cluster
+            const targetPriceEl = document.getElementById('elliott-target-price');
+            const targetTitleEl = document.getElementById('elliott-target-title');
+            if (targetPriceEl) {
+                targetPriceEl.textContent = `$${(w5y*0.98).toFixed(2)} - $${(w5y*1.05).toFixed(2)}`;
+            }
+            if (targetTitleEl) {
+                targetTitleEl.textContent = `Wave (V) Completion Zone`;
+            }
+
+        } else if (engineType === 'legacy') {
+            pricePath.setAttribute('stroke', 'var(--text-main)');
+            pricePath.setAttribute('stroke-width', '2');
+            
+            const pattern = recognizePattern(history);
+            let geometryHtml = '';
+
+            if (pattern.type === 'head_shoulders') {
+                const midY = scaleY(prices[Math.floor(prices.length * 0.8)]);
+                geometryHtml = `<line x1="0" y1="${midY}" x2="${width}" y2="${midY}" stroke="var(--neon-pink)" stroke-width="2" stroke-dasharray="4,4" />`;
+            } else if (pattern.type === 'double_top') {
+                const y = scaleY(pattern.resistance);
+                geometryHtml = `<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--neon-pink)" stroke-width="2" stroke-dasharray="4,4" />`;
+            } else if (pattern.type === 'double_bottom') {
+                const y = scaleY(pattern.support);
+                geometryHtml = `<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--neon-green)" stroke-width="2" stroke-dasharray="4,4" />`;
+            } else if (pattern.type === 'ascending_triangle') {
+                const resY = scaleY(pattern.resistance);
+                const sup1X = scaleX(pattern.supportStart.index);
+                const sup1Y = scaleY(pattern.supportStart.price);
+                const sup2X = scaleX(pattern.supportEnd.index);
+                const sup2Y = scaleY(pattern.supportEnd.price);
+                const slope = (sup2Y - sup1Y) / (sup2X - sup1X);
+                const endY = sup1Y + slope * (width - sup1X);
+                
+                geometryHtml = `
+                    <line x1="0" y1="${resY}" x2="${width}" y2="${resY}" stroke="var(--neon-pink)" stroke-width="2" stroke-dasharray="4,4" />
+                    <line x1="${sup1X}" y1="${sup1Y}" x2="${width}" y2="${endY}" stroke="var(--neon-green)" stroke-width="2" stroke-dasharray="4,4" />
+                `;
+            } else {
+                const resY = scaleY(pattern.res);
+                const supY = scaleY(pattern.sup);
+                geometryHtml = `
+                    <line x1="0" y1="${resY}" x2="${width}" y2="${resY}" stroke="var(--neon-pink)" stroke-width="2" stroke-dasharray="4,4" />
+                    <line x1="0" y1="${supY}" x2="${width}" y2="${supY}" stroke="var(--neon-cyan)" stroke-width="2" stroke-dasharray="4,4" />
+                `;
+            }
+
+            svg.innerHTML += `
+                <text x="${width/2}" y="20" class="ew-label pattern-title-txt" fill="var(--text-main)" id="pattern-title-text-svg" text-anchor="middle" data-raw-text="${pattern.text}">${pattern.text}</text>
+                ${geometryHtml}
+                <text x="10" y="${height - 10}" fill="var(--neon-cyan)" font-size="10" id="pattern-desc-text-svg">${pattern.desc}</text>
+            `;
+        }
+
+        svg.appendChild(pricePath);
+    };
+
+    const startSocialSentimentStream = () => {
+        const hotList = document.getElementById('social-hot-list');
+        if (!hotList) return;
+
+        const tickers = ['NVDA', 'TSLA', 'PLTR', 'SMCI', 'COIN', 'MSTR', 'AMD', 'AAPL'];
+        const platforms = ['X / Twitter', 'Reddit r/WallStreetBets', 'StockTwits', 'Bloomberg Terminal', 'Discord Alpha'];
+        const messages = [
+            "Unusual options volume detected.",
+            "Chatter spiking on Earnings play.",
+            "Regulatory fears trending across FinTwit.",
+            "Retail squeeze momentum building.",
+            "Dark pool prints indicating accumulation.",
+            "CEO tweet driving algorithmic buying."
+        ];
+
+        setInterval(() => {
+            const ticker = tickers[Math.floor(Math.random() * tickers.length)];
+            const isBull = Math.random() > 0.4; // 60% chance bull
+            const pct = Math.floor(Math.random() * 20) + 80; // 80-99%
+            const platform = platforms[Math.floor(Math.random() * platforms.length)];
+
+            const card = document.createElement('div');
+            card.className = `hot-card ${isBull ? 'bullish' : 'bearish'}`;
+            card.style.animation = 'flashCard 1s ease-out';
+            card.innerHTML = `
+                <div class="hc-header">
+                    <span class="hc-ticker">${ticker}</span>
+                    <span class="hc-sentiment">${pct}% ${isBull ? 'BULL' : 'BEAR'}</span>
+                </div>
+                <div class="hc-body">"${messages[Math.floor(Math.random() * messages.length)]}"</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); margin-top:5px;">Source: ${platform}</div>
+            `;
+
+            hotList.insertBefore(card, hotList.firstChild);
+
+            // Keep only latest 5
+            if (hotList.children.length > 5) {
+                hotList.removeChild(hotList.lastChild);
+            }
+        }, 8000);
+    };
+
+    const startLiveAlertsStream = () => {
+        const liveAlerts = document.getElementById('live-alerts');
+        if (!liveAlerts) return;
+
+        liveAlerts.addEventListener('click', (e) => {
+            if (e.target.classList.contains('ticker-badge')) {
+                const ticker = e.target.textContent;
+                const searchInput = document.getElementById('tickerSearch');
+                if (searchInput) {
+                    searchInput.value = ticker;
+                    const searchBtn = document.getElementById('btnSearch');
+                    if (searchBtn) searchBtn.click();
+                }
+                
+                const deepDiveBtn = document.querySelector('.tab-btn[data-target="tab-deepdive"]');
+                if (deepDiveBtn) {
+                    deepDiveBtn.click();
+                }
+            }
+        });
+
+        const tickers = ['NVDA', 'TSLA', 'AAPL', 'AMD', 'SPY', 'QQQ', 'MSFT', 'META'];
+        const types = ['IB Breakout', 'ICT Order Block', 'Liquidity Sweep', 'VWAP Rejection', 'MACD Cross'];
+        
+        setInterval(() => {
+            const ticker = tickers[Math.floor(Math.random() * tickers.length)];
+            const type = types[Math.floor(Math.random() * types.length)];
+            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            
+            const alertItem = document.createElement('div');
+            alertItem.className = 'alert-item';
+            alertItem.style.animation = 'flashCard 1s ease-out';
+            
+            let desc = '';
+            if (type.includes('Breakout')) desc = `Price broke key levels with high relative volume.`;
+            else if (type.includes('ICT')) desc = `Pulled back to 15m Order Block. Institutional sponsorship evident.`;
+            else if (type.includes('Sweep')) desc = `Swept previous liquidity pools and aggressively rejected.`;
+            else desc = `Algorithmic momentum shift detected.`;
+
+            alertItem.innerHTML = `
+                <div class="alert-time">${time}</div>
+                <div class="alert-type">${type}</div>
+                <div class="alert-desc"><span class="ticker-badge">${ticker}</span> ${desc}</div>
+            `;
+            
+            liveAlerts.insertBefore(alertItem, liveAlerts.firstChild);
+            
+            if (liveAlerts.children.length > 5) {
+                liveAlerts.removeChild(liveAlerts.lastChild);
+            }
+        }, 6000);
+    };
+
+    const handleSearch = async (isSilentUpdate = false) => {
+        let ticker = activeTickerStr;
+        if (!isSilentUpdate) {
+            ticker = searchInput.value.trim().toUpperCase();
+            if (!ticker) return;
+
+            // Reset search bar and update news feed status
+            searchInput.value = '';
+            newsFeed.innerHTML = `<div class="news-item">Fetching live market data via proxy server for <span class="neon-cyan">$${ticker}</span>...</div>`;
+        }
+
+        try {
+            // Fetch the financial data
+            const data = await fetchStockData(ticker);
+            
+            const sign = data.change >= 0 ? '+' : '';
+            const colorClass = data.change >= 0 ? 'bullish' : 'bearish';
+            const priceNum = parseFloat(data.price);
+            const fibUp = (priceNum * 1.05).toFixed(2);
+            const fibDown = (priceNum * 0.95).toFixed(2);
+
+            // Set global data state for zoom re-draws
+            activeTickerStr = ticker;
+            activeHistoryData = data.history;
+            if (!zoomDomain) {
+                // Default to full history on first search
+                zoomDomain = [0, data.history.length - 1];
+            } else {
+                // Keep the domain size, but attach it to the tail (latest data)
+                const windowSize = zoomDomain[1] - zoomDomain[0];
+                zoomDomain = [data.history.length - 1 - windowSize, data.history.length - 1];
+                if (zoomDomain[0] < 0) zoomDomain[0] = 0;
+            }
+
+            const visibleHistory = activeHistoryData.slice(zoomDomain[0], zoomDomain[1] + 1);
+
+            // Render chart axes based on new price and history
+            renderChartAxes(ticker, data.price, visibleHistory);
+
+            // Fetch live Google News
+            const newsHtml = await fetchGoogleNews(ticker);
+            newsFeed.innerHTML = newsHtml;
+
+            // Update all Chart Panel Titles across tabs
+            document.querySelectorAll('.panel-title').forEach(title => {
+                const originalTitle = title.getAttribute('data-original-title') || title.textContent;
+                if(!title.hasAttribute('data-original-title')) {
+                    title.setAttribute('data-original-title', originalTitle);
+                }
+                title.innerHTML = `<span class="neon-cyan">${ticker}</span> - ${originalTitle}`;
+            });
+
+            // Update Unified Verdict Box context
+            const verdictHeader = document.querySelector('.verdict-header h2');
+            if (verdictHeader) {
+                verdictHeader.innerHTML = `TRI-ENGINE UNIFIED VERDICT: <span class="neon-cyan">${ticker}</span>`;
+            }
+
+            const patternObj = recognizePattern(visibleHistory);
+
+            // Dynamically update unified verdict panel values based on data changes
+            const isBullish = parseFloat(data.change) >= 0;
+            const volatility = Math.abs(parseFloat(data.changePercent));
+            const baseConf = 60 + Math.min(30, volatility * 5);
+
+            // Use the same deterministic seed for dynamic text variations
+            let seedCharHash = 0;
+            for (let i = 0; i < ticker.length; i++) {
+                seedCharHash += ticker.charCodeAt(i) * (i+1);
+            }
+            const seed = seedCharHash * 1000 + (data.history.length * 7);
+
+            document.getElementById('v-ewave-val').textContent = isBullish ? 'BULLISH' : 'BEARISH';
+            document.getElementById('v-ewave-val').className = `v-value ${isBullish ? 'neon-green' : 'neon-red'}`;
+            
+            const bullishWaves = ['Wave (I) Accumulation', 'Wave (III) Advancement', 'Wave (V) Target Active'];
+            const bearishWaves = ['Wave (A) Correction Initiated', 'Wave (C) Sharp Correction', 'Extended Bear Cycle'];
+            const ewaveStr = isBullish ? bullishWaves[seed % 3] : bearishWaves[seed % 3];
+            document.getElementById('v-ewave-sub').textContent = ewaveStr;
+
+            document.getElementById('v-gann-val').textContent = isBullish ? 'BULLISH' : 'BEARISH';
+            document.getElementById('v-gann-val').className = `v-value ${isBullish ? 'neon-green' : 'neon-red'}`;
+            
+            const bullishGannAngles = ['Above 1x1 Angle', 'Climbing 2x1 Angle', 'Supported by 4x1', 'Testing 8x1 Arc'];
+            const bearishGannAngles = ['Below 1x1 Angle', 'Failing 1x2 Angle', 'Rejected at Square of 9', 'Crushed below 1x4'];
+            const gannStr = isBullish ? bullishGannAngles[seed % 4] : bearishGannAngles[seed % 4];
+            document.getElementById('v-gann-sub').textContent = gannStr;
+
+            document.getElementById('v-hurst-val').textContent = volatility > 2 ? (isBullish ? 'BULLISH' : 'BEARISH') : 'NEUTRAL';
+            document.getElementById('v-hurst-val').className = `v-value ${volatility > 2 ? (isBullish ? 'neon-green' : 'neon-red') : 'neon-cyan'}`;
+            document.getElementById('v-hurst-sub').textContent = `Phase ${isBullish ? 'Expansion' : 'Contraction'} Window`;
+
+            document.getElementById('v-score-val').textContent = `${Math.floor(baseConf)}%`;
+            document.getElementById('v-score-val').className = `score-value ${isBullish ? 'neon-green' : 'neon-red'}`;
+
+            document.getElementById('v-action-zone').textContent = `${patternObj.text} | Pivot $${data.price}`;
+            document.getElementById('v-action-btn').textContent = isBullish ? 'LONG SETUP' : 'SHORT SETUP';
+            // Assuming button class toggles between buy and sell colors roughly
+            document.getElementById('v-action-btn').className = `btn btn-action ${isBullish ? 'buy' : 'sell'}`;
+
+            // Populate Trade Plan fields dynamically
+            if (document.getElementById('v-entry-price')) {
+                const entryVal = parseFloat(data.price);
+                const tgtMul = isBullish ? 1.08 : 0.92;
+                const stpMul = isBullish ? 0.96 : 1.04;
+                
+                document.getElementById('v-entry-price').textContent = `$${entryVal.toFixed(2)}`;
+                document.getElementById('v-target-price').textContent = `$${(entryVal * tgtMul).toFixed(2)}`;
+                document.getElementById('v-stop-price').textContent = `$${(entryVal * stpMul).toFixed(2)}`;
+                
+                document.getElementById('v-exit-plan').innerHTML = isBullish 
+                    ? 'Scale 50% at Target<br/>Trail Stop to Entry' 
+                    : 'Cover 50% at Target<br/>Hold runner';
+            }
+
+            // Populate Financial Health Matrix 
+            if (document.getElementById('h-rev-val')) {
+                 const fundRaw = await fetchFundamentalData(ticker);
+                 
+                 let revGrowth = 0; let epsGrowth = 0; let margin = 0; let debt = 0; let fcf = 0;
+                 let rawFcf = null; // declared at outer scope for FCF label use after if/else block
+                 
+                 if (fundRaw && fundRaw.quoteSummary && Array.isArray(fundRaw.quoteSummary.result) && fundRaw.quoteSummary.result.length > 0) {
+                     const fData = fundRaw.quoteSummary.result[0].financialData || {};
+                     const kData = fundRaw.quoteSummary.result[0].defaultKeyStatistics || {};
+                     
+                     // Revenue Growth
+                     revGrowth = (fData.revenueGrowth && fData.revenueGrowth.raw !== undefined) ? fData.revenueGrowth.raw * 100 : 0;
+
+                     // EPS Growth (YoY): Use forward EPS vs trailing EPS for the most accurate signal.
+                     // earningsQuarterlyGrowth and earningsGrowth are often distorted by one-time items
+                     // or base effects (e.g. a company that just turned profitable).
+                     // Forward vs trailing EPS is the cleanest, unambiguous metric.
+                     const trailingEps = (kData.trailingEps && kData.trailingEps.raw !== undefined) ? kData.trailingEps.raw : null;
+                     const forwardEps  = (kData.forwardEps  && kData.forwardEps.raw  !== undefined) ? kData.forwardEps.raw  : null;
+                     if (trailingEps !== null && forwardEps !== null && Math.abs(trailingEps) > 0.001) {
+                         // Cap at ±300% to avoid extreme display values for near-zero trailing EPS
+                         epsGrowth = Math.max(-300, Math.min(300, (forwardEps - trailingEps) / Math.abs(trailingEps) * 100));
+                     } else {
+                         // Fallback: earningsQuarterlyGrowth (YoY same-quarter comparison)
+                         epsGrowth = (kData.earningsQuarterlyGrowth && kData.earningsQuarterlyGrowth.raw !== undefined)
+                             ? kData.earningsQuarterlyGrowth.raw * 100 : 0;
+                     }
+
+                     // Operating Margin
+                     margin = (fData.operatingMargins && fData.operatingMargins.raw !== undefined) ? fData.operatingMargins.raw * 100 : 0;
+
+                     // Debt/Equity: Yahoo returns as % for most stocks (AAPL: 102.63 → /100 = 1.03x ratio).
+                     // But banks return the actual leverage ratio directly (SOFI: 18.487 = 18.5x leverage).
+                     // Heuristic: raw > 10 means it's already a ratio; don't divide.
+                     if (fData.debtToEquity && fData.debtToEquity.raw !== undefined) {
+                         const rawDE = fData.debtToEquity.raw;
+                         debt = rawDE > 10 ? rawDE : rawDE / 100;
+                     } else {
+                         debt = 0; // Default if no debtToEquity data
+                     }
+
+                     // FreeCashflow: banks don't report FCF — fall back to net income as proxy.
+                     rawFcf = (fData.freeCashflow && fData.freeCashflow.raw !== undefined) ? fData.freeCashflow.raw : null;
+                     const rawNI = (kData.netIncomeToCommon && kData.netIncomeToCommon.raw !== undefined) ? kData.netIncomeToCommon.raw : null;
+                     if (rawFcf !== null) {
+                         fcf = rawFcf / 1000000;
+                     } else if (rawNI !== null) {
+                         fcf = rawNI / 1000000; // net income proxy for banks/financials
+                     } else {
+                         fcf = 0; // Default if no FCF or Net Income data
+                     }
+                 } else {
+                     // Fallback to deterministic simulated data if the API fails entirely for this ticker
+                     let seedCharHash = 0;
+                     for (let i = 0; i < ticker.length; i++) {
+                         seedCharHash += ticker.charCodeAt(i) * (i+1);
+                     }
+                     const seed = seedCharHash * 1000 + (data.history.length * 7); 
+                     
+                     revGrowth = ((seed % 50) - 5) * (isBullish ? 1 : 0.4); 
+                     epsGrowth = ((seed % 80) - 15) * (isBullish ? 1.2 : 0.5); 
+                     margin = 8 + (seed % 27); 
+                     debt = 0.05 + ((seed % 150) / 100); 
+                     fcf = (seed % 14900) + 100;
+                 }
+                 
+                 // Apply specific overrides requested by user regardless of API/simulation origin
+                 if (ticker === 'PTR') {
+                     margin = 40.2;
+                     revGrowth = 12.5;
+                     epsGrowth = 22.4;
+                     debt = 0.35;
+                     fcf = 18500;
+                 }
+
+                 const isRevGood = revGrowth > 5;
+                 const isEpsGood = epsGrowth > 10;
+                 const isMarginGood = margin > 15;
+                 // Banks carry high leverage by design (10-30x is normal). Use sector-aware threshold.
+                 // For banks (debt > 10): healthy range is 5-30x leverage.
+                 // For regular stocks (debt <= 1): healthy is < 1.0x ratio.
+                 const isBank = debt > 10;
+                 const isDebtGood = isBank ? (debt >= 5 && debt <= 30) : (debt > 0 && debt < 1.0);
+                 const debtLabel = isBank ? `${debt.toFixed(1)}x leverage` : debt.toFixed(2);
+                 const isFcfGood = fcf > 100; // lowered threshold: smaller companies or banks may have $100M+ net income
+
+                 const healthScore = [isRevGood, isEpsGood, isMarginGood, isDebtGood, isFcfGood].filter(Boolean).length;
+
+                 const setMetric = (idPrefix, valStr, isGood, trendStr) => {
+                     document.getElementById(`${idPrefix}-val`).textContent = valStr;
+                     document.getElementById(`${idPrefix}-val`).className = isGood ? 'neon-green' : 'neon-red';
+                     document.getElementById(`${idPrefix}-trend`).textContent = trendStr;
+                     document.getElementById(`${idPrefix}-trend`).style.color = isGood ? 'var(--neon-green)' : 'var(--neon-red)';
+                 };
+
+                 setMetric('h-rev', `${revGrowth > 0 ? '+' : ''}${revGrowth.toFixed(1)}%`, isRevGood, isRevGood ? 'Accelerating ▼ Costs' : 'Decelerating');
+                 setMetric('h-eps', `${epsGrowth > 0 ? '+' : ''}${epsGrowth.toFixed(1)}%`, isEpsGood, isEpsGood ? 'Outperforming Estimates' : 'Missing Estimates');
+                 setMetric('h-margin', `${margin.toFixed(1)}%`, isMarginGood, isMarginGood ? 'Expanding' : 'Contracting');
+                 setMetric('h-debt', debtLabel, isDebtGood, isDebtGood ? (isBank ? 'Within Normal Bank Leverage' : 'Deleveraging') : (isBank ? 'High Leverage Risk' : 'Accumulating Debt'));
+                 setMetric('h-fcf', `$${fcf.toFixed(0)}M`, isFcfGood, isFcfGood ? (rawFcf !== null ? 'Generating Cash' : 'Net Income Positive') : (rawFcf !== null ? 'Burning Cash' : 'Net Loss'));
+
+                 const verdictEl = document.getElementById('h-verdict-val');
+                 if (healthScore >= 4) {
+                     verdictEl.textContent = 'STRONG BUY';
+                     verdictEl.className = 'neon-green';
+                     verdictEl.parentElement.style.borderColor = 'var(--neon-green)';
+                     verdictEl.parentElement.style.boxShadow = 'inset 0 0 10px rgba(57,255,20,0.1)';
+                 } else if (healthScore >= 2) {
+                     verdictEl.textContent = 'HOLD / NEUTRAL';
+                     verdictEl.className = 'neon-cyan';
+                     verdictEl.parentElement.style.borderColor = 'var(--neon-cyan)';
+                     verdictEl.parentElement.style.boxShadow = 'inset 0 0 10px rgba(0,240,255,0.1)';
+                 } else {
+                     verdictEl.textContent = 'HIGH RISK';
+                     verdictEl.className = 'neon-red';
+                     verdictEl.parentElement.style.borderColor = 'var(--neon-red)';
+                     verdictEl.parentElement.style.boxShadow = 'inset 0 0 10px rgba(255,7,58,0.1)';
+                 }
+            }
+
+            // Dynamically Draw SVG Paths for all 3 charts + Legacy pattern based on historical data array
+            drawDynamicChart('gann-chart', visibleHistory, 'gann');
+            drawDynamicChart('hurst-chart', visibleHistory, 'hurst');
+            drawDynamicChart('elliott-chart', visibleHistory, 'elliott');
+            drawDynamicChart('legacy-chart', visibleHistory, 'legacy');
+            
+            // Re-select the SVGs to update specific pattern text nodes after re-drawing
+            const updatedPatTitle = document.getElementById('pattern-title-text-svg');
+            if (updatedPatTitle) {
+                const rawText = updatedPatTitle.getAttribute('data-raw-text') || 'PATTERN DETECTED';
+                updatedPatTitle.textContent = `${ticker} ${rawText}`;
+            }
+
+            // Provide a static redraw over legacy tab container as backup mapping 
+            const patTitleList = document.querySelectorAll('.pattern-title-txt');
+            patTitleList.forEach(p => {
+                const rawText = p.getAttribute('data-raw-text') || 'PATTERN DETECTED';
+                p.textContent = `${ticker} ${rawText} Focus`;
+            });
+
+            // Prepend new data to Ribbon Ticker
+            const newItem = document.createElement('div');
+            newItem.className = 'ticker-item';
+            newItem.innerHTML = `<span>${ticker}</span> LATEST: <span class="${colorClass}">$${data.price} (${sign}${data.changePercent}%)</span>`;
+            
+            const divider = document.createElement('div');
+            divider.className = 'ticker-devider';
+            divider.innerText = '|';
+
+            liveTickerTrack.insertBefore(divider, liveTickerTrack.firstChild);
+            liveTickerTrack.insertBefore(newItem, liveTickerTrack.firstChild);
+
+            const statusIndicator = document.querySelector('.status-indicator');
+            if (statusIndicator) {
+                statusIndicator.classList.remove('offline');
+                statusIndicator.classList.add('online');
+                // Pulse effect
+                statusIndicator.style.opacity = '1';
+                setTimeout(() => statusIndicator.style.opacity = '0.7', 500);
+            }
+
+        } catch (error) {
+            console.error(error);
+            const statusIndicator = document.querySelector('.status-indicator');
+            if (statusIndicator) {
+                statusIndicator.classList.remove('online');
+                statusIndicator.classList.add('offline');
+            }
+            // Only alert on the first explicit search, not on background updates
+            if (isSilentUpdate !== true) {
+                alert(error.message);
+                newsFeed.innerHTML = `<div class="news-item"><span class="neon-red">Error:</span> ${error.message}</div>`;
+            }
+        }
+    };
+
+    const handleSearchClick = () => {
+        zoomDomain = null; // Reset zoom on new manual search
+        handleSearch(false);
+        
+        // Start live data polling interval
+        if (liveDataInterval) clearInterval(liveDataInterval);
+        liveDataInterval = setInterval(() => {
+            if (activeTickerStr) {
+                handleSearch(true); // silent update
+            }
+        }, 15000); // Poll every 15 seconds
+    };
+
+    searchBtn.addEventListener('click', handleSearchClick);
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleSearchClick();
+    });
+
+    const searchWrapper = document.querySelector('.ribbon-search');
+    const tickerListUI = document.getElementById('custom-ticker-list');
+    let allTickers = [];
+
+    // Populate data list for autocomplete
+    const populateTickers = async () => {
+        try {
+            const res = await fetch('tickers.txt');
+            if (res.ok) {
+                const text = await res.text();
+                allTickers = text.split('\\n').filter(t => t.trim() !== '');
+            }
+        } catch (e) {
+            console.log("Could not load tickers.txt", e);
+        }
+    };
+    populateTickers();
+
+    searchInput.addEventListener('input', (e) => {
+         const val = e.target.value.toUpperCase();
+         if (!val) {
+             tickerListUI.classList.remove('active');
+             return;
+         }
+         const matches = allTickers.filter(t => t.startsWith(val)).slice(0, 10);
+         if (matches.length > 0) {
+             tickerListUI.innerHTML = matches.map(t => `<li data-ticker="${t}">${t}</li>`).join('');
+             tickerListUI.classList.add('active');
+         } else {
+             tickerListUI.classList.remove('active');
+         }
+    });
+
+    tickerListUI.addEventListener('click', (e) => {
+         if (e.target.tagName === 'LI') {
+             searchInput.value = e.target.getAttribute('data-ticker');
+             tickerListUI.classList.remove('active');
+             handleSearchClick();
+         }
+    });
+
+    document.addEventListener('click', (e) => {
+         if (!searchWrapper.contains(e.target)) {
+              tickerListUI.classList.remove('active');
+         }
+    });
+
+    // 4. Zoom & Pan Logic (Mouse Wheel + Drag Panning + Click Expand)
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartDomain = null;
+
+    const refreshAllCharts = () => {
+        if (!activeHistoryData || !zoomDomain) return;
+        const visibleHistory = activeHistoryData.slice(zoomDomain[0], zoomDomain[1] + 1);
+        
+        // Update all standard panels
+        ['gann-chart', 'hurst-chart', 'elliott-chart', 'legacy-chart'].forEach(id => {
+            const container = document.getElementById(id);
+            if (container) {
+                const type = container.getAttribute('data-engine') || 'legacy';
+                drawDynamicChart(id, visibleHistory, type);
+                
+                if (type === 'legacy') {
+                    const p = recognizePattern(visibleHistory);
+                    const textEl = container.querySelector('.pattern-title-txt');
+                    if (textEl) textEl.textContent = `${activeTickerStr} ${p.text} Focus`;
+                }
+            }
+        });
+
+        // Update modal if open
+        const modalChart = document.getElementById('modal-expanded-chart');
+        if (modalChart) {
+            const type = modalChart.getAttribute('data-engine') || 'legacy';
+            drawDynamicChart('modal-expanded-chart', visibleHistory, type);
+            
+            if (type === 'elliott') {
+                const prices = visibleHistory.map(d => d.price);
+                const w5y = Math.max(...prices) * 1.05;
+                const clonedTargetPrice = document.querySelector('#modal-expanded-chart #elliott-target-price');
+                if (clonedTargetPrice) clonedTargetPrice.textContent = `$${(w5y*0.98).toFixed(2)} - $${(w5y*1.05).toFixed(2)}`;
+            } else if (type === 'legacy') {
+                const p = recognizePattern(visibleHistory);
+                const updatedPatTitle = document.querySelector('#modal-expanded-chart #pattern-title-text-svg');
+                if (updatedPatTitle) {
+                    const rawText = updatedPatTitle.getAttribute('data-raw-text') || p.text;
+                    updatedPatTitle.textContent = `${activeTickerStr} ${rawText}`;
+                }
+            }
+        }
+        
+        renderChartAxes(activeTickerStr, visibleHistory[visibleHistory.length-1].price, visibleHistory);
+    };
+
+    // Use Event Delegation for zooming and panning so it applies to dynamically cloned Modal charts as well
+    document.addEventListener('wheel', (e) => {
+        const container = e.target.closest('.chart-container, #modal-expanded-chart');
+        if (!container || !activeHistoryData || !zoomDomain) return;
+        e.preventDefault();
+
+        const zoomSpeed = 0.05;
+        const historyLen = activeHistoryData.length;
+        const currentSize = zoomDomain[1] - zoomDomain[0];
+        
+        let zoomDelta = Math.floor(currentSize * zoomSpeed);
+        if (zoomDelta < 2) zoomDelta = 2;
+
+        let newStart = zoomDomain[0];
+        let newEnd = zoomDomain[1];
+
+        if (e.deltaY < 0) {
+            newStart += zoomDelta;
+            newEnd -= zoomDelta;
+        } else {
+            newStart -= zoomDelta;
+            newEnd += zoomDelta;
+        }
+
+        const minWindowSize = 20;
+        if (newEnd - newStart < minWindowSize) {
+            const center = Math.floor((newStart + newEnd) / 2);
+            newStart = center - Math.floor(minWindowSize/2);
+            newEnd = center + Math.floor(minWindowSize/2);
+        }
+
+        if (newStart < 0) newStart = 0;
+        if (newEnd > historyLen - 1) newEnd = historyLen - 1;
+        
+        if (newEnd - newStart < currentSize && e.deltaY > 0) {
+           if (newStart === 0) newEnd = Math.min(historyLen - 1, newStart + currentSize + zoomDelta*2);
+           if (newEnd === historyLen - 1) newStart = Math.max(0, newEnd - currentSize - zoomDelta*2);
+        }
+
+        zoomDomain = [newStart, newEnd];
+        refreshAllCharts();
+    }, { passive: false });
+
+    document.addEventListener('mousedown', (e) => {
+        const container = e.target.closest('.chart-container, #modal-expanded-chart');
+        if (!container || !activeHistoryData || !zoomDomain) return;
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragStartDomain = [...zoomDomain];
+        container.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging || !activeHistoryData || !zoomDomain || !dragStartDomain) return;
+        const container = e.target.closest('.chart-container, #modal-expanded-chart') || document.querySelector('.chart-container.active') || document.querySelector('.chart-container');
+        if(!container) return;
+        
+        const dx = e.clientX - dragStartX;
+        if (Math.abs(dx) < 5) return;
+
+        const containerWidth = container.clientWidth || 800;
+        const historyLen = activeHistoryData.length;
+        const currentSize = dragStartDomain[1] - dragStartDomain[0];
+        
+        const candlesToPan = Math.round((dx / containerWidth) * currentSize * 1.5);
+        
+        let newStart = dragStartDomain[0] - candlesToPan;
+        let newEnd = dragStartDomain[1] - candlesToPan;
+        
+        if (newStart < 0) {
+            newEnd = Math.min(newEnd - newStart, historyLen - 1);
+            newStart = 0;
+        }
+        if (newEnd > historyLen - 1) {
+            newStart = Math.max(0, newStart - (newEnd - (historyLen - 1)));
+            newEnd = historyLen - 1;
+        }
+        
+        zoomDomain = [newStart, newEnd];
+        refreshAllCharts();
+    });
+
+    const stopDrag = (e) => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.querySelectorAll('.chart-container, #modal-expanded-chart').forEach(c => c.style.cursor = 'default');
+
+        if (e && e.type === 'mouseup') {
+            const dx = e.clientX - dragStartX;
+            const dy = e.clientY - dragStartY;
+            if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+                const container = e.target.closest('.chart-container');
+                if (container && container.id !== 'modal-expanded-chart') {
+                    openChartModal(container);
+                }
+            }
+        }
+    };
+
+    document.addEventListener('mouseup', stopDrag);
+    document.addEventListener('mouseleave', stopDrag);
+
+    // 5. Manual Zoom Button Logic
+    const zoomInBtns = document.querySelectorAll('.btn-zoom-in');
+    const zoomOutBtns = document.querySelectorAll('.btn-zoom-out');
+
+    const handleManualZoom = (direction) => {
+        if (!activeHistoryData || !zoomDomain) return;
+        
+        const zoomSpeed = 0.15; // 15% per click for faster manual zooming
+        const historyLen = activeHistoryData.length;
+        const currentSize = zoomDomain[1] - zoomDomain[0];
+        
+        let zoomDelta = Math.floor(currentSize * zoomSpeed);
+        if (zoomDelta < 2) zoomDelta = 2;
+
+        let newStart = zoomDomain[0];
+        let newEnd = zoomDomain[1];
+
+        if (direction === 'in') {
+            newStart += zoomDelta;
+            newEnd -= zoomDelta;
+        } else {
+            newStart -= zoomDelta;
+            newEnd += zoomDelta;
+        }
+
+        const minWindowSize = 20;
+        if (newEnd - newStart < minWindowSize) {
+            const center = Math.floor((newStart + newEnd) / 2);
+            newStart = center - Math.floor(minWindowSize/2);
+            newEnd = center + Math.floor(minWindowSize/2);
+        }
+
+        if (newStart < 0) newStart = 0;
+        if (newEnd > historyLen - 1) newEnd = historyLen - 1;
+
+        if (newEnd - newStart < currentSize && direction === 'out') {
+            if (newStart === 0) newEnd = Math.min(historyLen - 1, newStart + currentSize + zoomDelta*2);
+            if (newEnd === historyLen - 1) newStart = Math.max(0, newEnd - currentSize - zoomDelta*2);
+        }
+
+        zoomDomain = [newStart, newEnd];
+        refreshAllCharts();
+    };
+
+    zoomInBtns.forEach(btn => btn.addEventListener('click', () => handleManualZoom('in')));
+    zoomOutBtns.forEach(btn => btn.addEventListener('click', () => handleManualZoom('out')));
+
+    // Start background simulation streams
+    startSocialSentimentStream();
+    startLiveAlertsStream();
+
+});

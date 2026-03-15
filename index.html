@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unified Cycle Terminal</title>
+    
+    <!-- Google Fonts: Orbitron (Cyber/Neon), Roboto Mono (Data) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Roboto+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="terminal-layout">
+        
+        <!-- Contextual Ribbon -->
+    <header class="ribbon">
+        <div class="ribbon-brand">
+            <h1><span class="neon-cyan">CYBER</span>QUANT TERMINAL</h1>
+        </div>
+        <div class="ribbon-ticker">
+            <div class="ticker-scroll" id="live-ticker-track">
+                <!-- Ticker data will be populated here -->
+                <div class="ticker-item"><span>SPY</span> SMA(50): <span class="bullish">Support Held</span></div>
+                <div class="ticker-devider">|</div>
+                <div class="ticker-item"><span>NVDA</span> EMA(200): <span class="bullish">Support Held</span></div>
+                <div class="ticker-devider">|</div>
+                <div class="ticker-item"><span>TSLA</span> P/E Ratio: <span class="bearish">Elevated (34.2)</span></div>
+                <div class="ticker-devider">|</div>
+                <div class="ticker-item"><span>AAPL</span> Q3 Earnings: <span class="bullish">Beat (+$0.12)</span></div>
+                <div class="ticker-devider">|</div>
+                <div class="ticker-item"><span>MSFT</span> Debt/Equity: <span class="neutral">Optimal (0.8)</span></div>
+            </div>
+        </div>
+        <div class="ribbon-search">
+            <input type="text" id="tickerSearch" placeholder="Enter Ticker ($AAPL)..." autocomplete="off" />
+            <ul id="custom-ticker-list" class="custom-autocomplete"></ul>
+            <button id="btnSearch">⌕</button>
+        </div>
+        <div class="ribbon-status">
+            <span class="status-icon">⚙</span>
+            <span class="status-indicator online"></span> System: Active
+        </div>
+    </header>
+
+        <!-- Main Terminal Area -->
+        <main class="terminal-main">
+            <!-- Tabs Navigation -->
+            <nav class="terminal-tabs">
+                <button class="tab-btn active" data-target="tab-deepdive">CYCLE DEEP-DIVE [GANN/HURST]</button>
+                <button class="tab-btn" data-target="tab-fractal">FRACTAL ANALYSIS [ELLIOTT]</button>
+                <button class="tab-btn" data-target="tab-legacy">PATTERN RECOGNITION</button>
+                <button class="tab-btn" data-target="tab-alerts">LIVE ALERTS</button>
+                <button class="tab-btn" data-target="tab-finance">NEWS WIRE</button>
+                <button class="tab-btn" data-target="tab-health">FINANCIAL HEALTH</button>
+            </nav>
+
+            <!-- Tab Content: Cycle Deep-Dive (Gann & Hurst) -->
+            <div class="tab-pane active" id="tab-deepdive">
+                <div class="engine-grid-2">
+                    
+                    <!-- Gann Engine Container -->
+                    <div class="engine-panel">
+                        <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                            <h2 class="panel-title">GANN ENGINE</h2>
+                            <div class="panel-controls" style="display:flex; gap:5px;">
+                                <button class="btn btn-zoom-in" title="Zoom In Time">[+]</button>
+                                <button class="btn btn-zoom-out" title="Zoom Out Time">[-]</button>
+                                <button class="btn btn-expand" title="Double-click chart to expand">⛶</button>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="gann-chart" data-engine="gann">
+                            <div class="chart-mockup gann-mockup">
+                                <!-- Gann specific visual elements (arcs, fans) -->
+                                <svg class="gann-svg" width="100%" height="100%">
+                                    <line x1="0" y1="100%" x2="100%" y2="0" class="gann-fan" />
+                                    <line x1="0" y1="100%" x2="100%" y2="50%" class="gann-fan" />
+                                    <line x1="0" y1="100%" x2="50%" y2="0" class="gann-fan" />
+                                    <circle cx="0" cy="100%" r="40%" class="gann-arc" />
+                                    <circle cx="0" cy="100%" r="70%" class="gann-arc" />
+                                    
+                                    <!-- High probability intersection -->
+                                    <circle cx="45%" cy="35%" r="15" class="gann-intersection pulse" />
+                                    <text x="45%" y="30%" class="neon-cyan gann-label" id="gann-ticker-text">Squaring of Price/Time</text>
+                                </svg>
+                            </div>
+                            <div class="chart-y-axis"></div>
+                            <div class="chart-x-axis"></div>
+                        </div>
+                    </div>
+
+                    <!-- Hurst Cycle Engine Container -->
+                    <div class="engine-panel">
+                        <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                            <h2 class="panel-title">HURST CYCLE ENGINE</h2>
+                            <div class="panel-controls" style="display:flex; gap:5px;">
+                                <button class="btn btn-zoom-in" title="Zoom In Time">[+]</button>
+                                <button class="btn btn-zoom-out" title="Zoom Out Time">[-]</button>
+                                <button class="btn btn-expand" title="Double-click chart to expand">⛶</button>
+                            </div>
+                        </div>
+                        <div class="chart-container" id="hurst-chart" data-engine="hurst">
+                            <div class="chart-mockup hurst-mockup">
+                                <!-- Simulated price wave -->
+                                <svg class="hurst-svg" width="100%" height="100%">
+                                    <path d="M0,150 Q50,50 100,150 T200,150 T300,150 T400,150" class="price-line" fill="none" />
+                                    <path d="M0,130 Q50,30 100,130 T200,130 T300,130 T400,130" class="envelope-line" fill="none" />
+                                    <path d="M0,170 Q50,70 100,170 T200,170 T300,170 T400,170" class="envelope-line" fill="none" />
+                                    
+                                    <!-- FLD Line -->
+                                    <path d="M50,150 Q100,50 150,150 T250,150 T350,150" class="fld-line neon-pink" fill="none" />
+                                </svg>
+                                
+                                <!-- Heatmap Time Windows -->
+                                <div class="time-windows">
+                                    <div class="time-window w-low"></div>
+                                    <div class="time-window w-med"></div>
+                                    <div class="time-window w-high">
+                                        <span class="window-label" id="hurst-trough-text">Next Trough<br>80h Nominal</span>
+                                    </div>
+                                    <div class="time-window w-med"></div>
+                                </div>
+                            </div>
+                            <div class="chart-y-axis"></div>
+                            <div class="chart-x-axis"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Content: Fractal Analysis (Elliott Wave) -->
+            <div class="tab-pane" id="tab-fractal">
+                <div class="engine-panel full-height">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 class="panel-title">ELLIOTT WAVE ENGINE</h2>
+                        <span class="badge badge-primary" style="margin-right:auto; margin-left:15px;">Grand Supercycle > Minuette</span>
+                        <div class="panel-controls" style="display:flex; gap:5px;">
+                            <button class="btn btn-zoom-in" title="Zoom In Time">[+]</button>
+                            <button class="btn btn-zoom-out" title="Zoom Out Time">[-]</button>
+                            <button class="btn btn-expand" title="Double-click chart to expand">⛶</button>
+                        </div>
+                    </div>
+                    <div class="chart-container" id="elliott-chart" data-engine="elliott">
+                        <div class="chart-mockup elliott-mockup">
+                            <svg class="elliott-svg" width="100%" height="100%">
+                                <!-- Primary Count (Bold) -->
+                                <path d="M50,250 L150,100 L200,180 L350,50 L420,120 L550,20" class="ew-primary" fill="none" />
+                                <!-- Alternate Count (Dashed, transparent) -->
+                                <path d="M200,180 L300,220 L380,150 L450,280" class="ew-alternate neon-red" fill="none" />
+                                
+                                <!-- Labels -->
+                                <text x="140" y="90" class="ew-label neon-cyan">(I)</text>
+                                <text x="195" y="200" class="ew-label neon-cyan">(II)</text>
+                                <text x="340" y="40" class="ew-label neon-cyan">(III)</text>
+                                <text x="415" y="140" class="ew-label neon-cyan">(IV)</text>
+                                <text x="540" y="15" class="ew-label neon-green">(V) Target</text>
+                                
+                                <text x="290" y="240" class="ew-label neon-red">Alt B</text>
+                            </svg>
+                            
+                            <!-- Price Target Box & Fib Clusters -->
+                            <div class="target-box pulse-slow" style="top: 10%; right: 10%;">
+                                <div class="target-title" id="elliott-target-title">Wave V Completion Zone</div>
+                                <div class="target-data">Fib Cluster: 1.618 / 2.618</div>
+                                <div class="target-price" id="elliott-target-price">$452.80 - $465.00</div>
+                            </div>
+                        </div>
+                        <div class="chart-y-axis"></div>
+                        <div class="chart-x-axis"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tab 3: Legacy TA -->
+            <div class="tab-pane" id="tab-legacy">
+                <div class="engine-panel full-height">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <span class="panel-title">PATTERN RECOGNITION ENGINE</span>
+                        <div class="panel-controls" style="display:flex; gap:5px;">
+                            <button class="btn btn-zoom-in" title="Zoom In Time">[+]</button>
+                            <button class="btn btn-zoom-out" title="Zoom Out Time">[-]</button>
+                            <button class="btn-expand">⛶</button>
+                        </div>
+                    </div>
+                    <div class="chart-container" id="legacy-chart" data-engine="legacy">
+                        <div class="chart-mockup legacy-chart">
+                            <!-- Chart Mockup SVG for Legacy TA -->
+                            <svg width="100%" height="100%">
+                                <path class="price-line" d="M 50,200 L 150,150 L 250,50 L 350,160 L 450,80 L 550,250" fill="none"/>
+                                <text x="250" y="40" class="ew-label pattern-title-txt" fill="var(--text-main)" id="pattern-title-text">HEAD & SHOULDERS</text>
+                                <line x1="100" y1="180" x2="500" y2="180" stroke="var(--neon-pink)" stroke-width="2" stroke-dasharray="4,4" />
+                                <text x="110" y="170" fill="var(--neon-pink)" font-size="10" id="pattern-desc-text">Neckline Breakthrough</text>
+                            </svg>
+                        </div>
+                        <div class="chart-y-axis"></div>
+                        <div class="chart-x-axis"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 4: Intraday Alerts -->
+            <div class="tab-pane" id="tab-alerts">
+                <div class="engine-panel full-height alert-feed">
+                    <div class="panel-header">
+                        <span class="panel-title">LIVE ORDER FLOW & ALERTS</span>
+                        <div class="badge pulse">3 NEW ALERTS</div>
+                    </div>
+                    <div class="alerts-container" id="live-alerts">
+                        <!-- Alert items will be injected here via JS -->
+                        <div class="alert-item break-out">
+                            <div class="alert-time">09:45 AM</div>
+                            <div class="alert-type">IB Breakout</div>
+                            <div class="alert-desc"><span class="ticker-badge">AAPL</span> Price broke Initial Balance High on 3x relative volume.</div>
+                        </div>
+                        <div class="alert-item ict-hit">
+                            <div class="alert-time">10:15 AM</div>
+                            <div class="alert-type">ICT Order Block</div>
+                            <div class="alert-desc"><span class="ticker-badge">TSLA</span> Pulled back to 15m Bullish Order Block. Institutional sponsorship evident.</div>
+                        </div>
+                        <div class="alert-item sweep">
+                            <div class="alert-time">11:30 AM</div>
+                            <div class="alert-type">Liquidity Sweep</div>
+                            <div class="alert-desc"><span class="ticker-badge">NVDA</span> Swept previous day lows and violently rejected.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 5: Finance Update -->
+            <div class="tab-pane" id="tab-finance">
+                <div class="engine-panel full-height">
+                    <div class="panel-header">
+                        <span class="panel-title">TERMINAL NEWS WIRE</span>
+                        <div class="panel-controls">
+                            <button class="btn-expand">⛶</button>
+                        </div>
+                    </div>
+                    <div class="news-container" id="news-feed">
+                        <!-- News items will be populated via JS -->
+                        <div class="news-item">Waiting for Yahoo/Google Data...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 6: Financial Health -->
+            <div class="tab-pane" id="tab-health">
+                <div class="engine-panel full-height">
+                    <div class="panel-header">
+                        <span class="panel-title">FUNDAMENTAL HEALTH METRICS</span>
+                    </div>
+                    <div class="health-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 15px; padding: 20px;">
+                        
+                        <!-- Revenue -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--panel-border); border-radius:4px;">
+                            <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">Revenue Growth (YoY)</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-rev-val" class="neon-cyan">---</div>
+                            <div style="font-size:0.75rem; margin-top:5px; padding-top:5px; border-top:1px dashed var(--panel-border);" id="h-rev-trend">Awaiting Data</div>
+                        </div>
+
+                        <!-- EPS -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--panel-border); border-radius:4px;">
+                            <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">EPS Growth (YoY)</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-eps-val" class="neon-cyan">---</div>
+                            <div style="font-size:0.75rem; margin-top:5px; padding-top:5px; border-top:1px dashed var(--panel-border);" id="h-eps-trend">Awaiting Data</div>
+                        </div>
+
+                        <!-- Margins -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--panel-border); border-radius:4px;">
+                            <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">Operating Margin</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-margin-val" class="neon-cyan">---</div>
+                            <div style="font-size:0.75rem; margin-top:5px; padding-top:5px; border-top:1px dashed var(--panel-border);" id="h-margin-trend">Awaiting Data</div>
+                        </div>
+                        
+                        <!-- Debt/Equity -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--panel-border); border-radius:4px;">
+                            <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">Debt/Equity Ratio</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-debt-val" class="neon-cyan">---</div>
+                            <div style="font-size:0.75rem; margin-top:5px; padding-top:5px; border-top:1px dashed var(--panel-border);" id="h-debt-trend">Awaiting Data</div>
+                        </div>
+                        
+                        <!-- Free Cash Flow -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--panel-border); border-radius:4px;">
+                            <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">Free Cash Flow</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-fcf-val" class="neon-cyan">---</div>
+                            <div style="font-size:0.75rem; margin-top:5px; padding-top:5px; border-top:1px dashed var(--panel-border);" id="h-fcf-trend">Awaiting Data</div>
+                        </div>
+                        
+                        <!-- Overall Verdict -->
+                        <div class="health-item" style="background:rgba(0,0,0,0.3); padding:15px; border:1px solid var(--neon-cyan); box-shadow:inset 0 0 10px rgba(0,240,255,0.1); border-radius:4px; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+                            <div style="font-size:0.8rem; color:var(--neon-cyan); text-transform:uppercase; margin-bottom:5px; letter-spacing:1px;">Fundamental Vector</div>
+                            <div style="font-size:1.5rem; font-weight:bold; font-family:var(--font-heading);" id="h-verdict-val" class="neon-cyan">PENDING</div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Unified Verdict Box -->
+            <div class="verdict-box">
+                <div class="verdict-header">
+                    <h2>TRI-ENGINE UNIFIED VERDICT</h2>
+                </div>
+                
+                <div class="verdict-grid">
+                    <div class="verdict-item">
+                        <div class="v-label">E-Wave Engine</div>
+                        <div class="v-value neon-green" id="v-ewave-val">BULLISH</div>
+                        <div class="v-sub" id="v-ewave-sub">Wave (V) of 3 unfolding</div>
+                    </div>
+                    
+                    <div class="verdict-item">
+                        <div class="v-label">Gann Engine</div>
+                        <div class="v-value neon-green" id="v-gann-val">BULLISH</div>
+                        <div class="v-sub" id="v-gann-sub">Above 1x1 Angle, Squaring Approaching</div>
+                    </div>
+                    
+                    <div class="verdict-item">
+                        <div class="v-label">Hurst Engine</div>
+                        <div class="v-value neon-cyan" id="v-hurst-val">NEUTRAL</div>
+                        <div class="v-sub" id="v-hurst-sub">Approaching 80h Trough Window</div>
+                    </div>
+                </div>
+                
+                <div class="verdict-footer">
+                    <div class="confluence-score">
+                        <div class="score-label">Confluence Score</div>
+                        <div class="score-value neon-green" id="v-score-val">86%</div>
+                    </div>
+                    <div class="action-zone">
+                        <div class="zone-label">High-Probability Action Zone:</div>
+                        <div class="zone-value" id="v-action-zone">48hr Window | Support $412.50</div>
+                    </div>
+                    <div class="action-buttons">
+                        <button class="btn btn-action buy" id="v-action-btn">LONG SETUP</button>
+                    </div>
+                </div>
+                
+                <div class="trade-plan-grid" style="display:flex; justify-content:space-between; align-items:center; margin-top: 15px; border-top: 1px solid var(--panel-border); padding-top: 15px; padding-bottom: 5px;">
+                    <div class="plan-item">
+                        <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Entry Zone</div>
+                        <div style="font-size:1.1rem; color:var(--neon-cyan); font-weight:bold;" id="v-entry-price">---</div>
+                    </div>
+                    <div class="plan-item">
+                        <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Price Target</div>
+                        <div style="font-size:1.1rem; color:var(--neon-green); font-weight:bold;" id="v-target-price">---</div>
+                    </div>
+                    <div class="plan-item">
+                        <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Stop Loss</div>
+                        <div style="font-size:1.1rem; color:var(--neon-red); font-weight:bold;" id="v-stop-price">---</div>
+                    </div>
+                    <div class="plan-item" style="text-align:right; max-width: 150px;">
+                        <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Exit Plan</div>
+                        <div style="font-size:0.8rem; color:var(--text-main); line-height: 1.2;" id="v-exit-plan">Awaiting Live Feed</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar: Social Chatter -->
+        <aside class="sidebar-social">
+            <div class="sidebar-header">
+                <h3>OMNI-CHANNEL SENTIMENT</h3>
+                <span class="pulse-dot"></span>
+            </div>
+            
+            <div class="chatter-section">
+                <h4>FLASHING HOT</h4>
+                <div class="hot-list" id="social-hot-list">
+                    <!-- Populated by JS -->
+                    <div class="hot-card bullish">
+                        <div class="hc-header">
+                            <span class="hc-ticker">PLTR</span>
+                            <span class="hc-sentiment">92% BULL</span>
+                        </div>
+                        <div class="hc-body">"Unusual options volume detected, chatter spiking on Earnings play."</div>
+                    </div>
+                    <div class="hot-card bearish">
+                        <div class="hc-header">
+                            <span class="hc-ticker">COIN</span>
+                            <span class="hc-sentiment">85% BEAR</span>
+                        </div>
+                        <div class="hc-body">"Regulatory fears trending across FinTwit. High sell volume."</div>
+                    </div>
+                </div>
+            </div>
+            
+        </aside>
+    </div>
+
+    <!-- Fullscreen Expanded Modal (Hidden by default) -->
+        <div class="fullscreen-modal" id="expanded-modal">
+            <div class="modal-header">
+                <h2 id="modal-title">ADVANCED SCENARIO VIEW</h2>
+                <button class="btn btn-close" id="close-modal">✖ ESC</button>
+            </div>
+            <div class="modal-body">
+                <div class="tv-toolbar">
+                    <!-- Fake TradingView tools -->
+                    <div class="tool-icon">✎</div>
+                    <div class="tool-icon">〰</div>
+                    <div class="tool-icon">⌘</div>
+                    <div class="tool-icon">⚡</div>
+                    <div class="tool-icon">◐</div>
+                </div>
+                <div class="modal-chart-area" id="modal-chart-content">
+                    <!-- Cloned chart will appear here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/app.js"></script>
+</body>
+</html>
