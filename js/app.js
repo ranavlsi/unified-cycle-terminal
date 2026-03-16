@@ -521,6 +521,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const len = prices.length;
             const currentPrice = prices[len - 1];
 
+            // Extend the X domain to include FUTURE_BARS of empty space on the right
+            // This is the "future canvas" where projections are drawn
+            const FUTURE_BARS = 120;
+            const totalBars = len - 1 + FUTURE_BARS;
+            // Override scaleX for the Elliott engine only
+            const ewScaleX = (idx) => padding + (idx / totalBars) * (width - padding * 2);
+            // futureX maps future slot offsets to SVG x-coord
+            // (slots are relative to the last historical bar)
+
+
             // ═══════════════════════════════════════════════════════════════════
             // STEP 1: ZigZag pivot algorithm — finds real swing highs & lows
             // Uses a minimum % deviation to filter noise. Adapts threshold to
@@ -726,6 +736,77 @@ document.addEventListener('DOMContentLoaded', () => {
             const sub5 = { idx: w3.idx, val: w3.val };
 
             // ═══════════════════════════════════════════════════════════════════
+            // STEP 4B: Current Wave Phase Detection
+            // Determine if we're currently IN Wave 4 (correction) or Wave 5 (impulse)
+            // by looking at price action AFTER W4 was established.
+            // ═══════════════════════════════════════════════════════════════════
+            const barsSinceW3 = len - 1 - w3.idx;   // bars elapsed since Wave 3 peak
+            const barsSinceW4 = len - 1 - w4.idx;   // bars elapsed since Wave 4 trough
+            const fullCycleLen = Math.max(1, w3.idx - w0.idx);  // typical impulse duration
+
+            // Wave 4 is "recent" if w4 happened in the last 15% of a full cycle
+            // AND price is still below w3 high by meaningful margin
+            const w4IsRecent  = w4.idx >= len - 1 - fullCycleLen * 0.20;
+            const belowW3High = currentPrice < w3.val * 0.98;
+            const inWave4     = w4IsRecent && belowW3High;
+            const inWave5     = !inWave4;
+            const currentWaveNum = inWave4 ? 4 : 5;
+
+            // ── Wave 4 Internal A-B-C from ZigZag pivots after W3 ─────────────
+            // A = first significant low after W3
+            // B = first bounce after A (38%-78% retrace of A)
+            // C = current bar (still unfolding) → dashed to NOW
+            const postW3Pivots = zigzagPivots.filter(p => p.idx > w3.idx);
+            let w4_a = null, w4_b = null, w4_c = null;
+
+            if (postW3Pivots.length >= 1) {
+                // A wave: first low after W3
+                const aCandidate = postW3Pivots.find(p => p.type === 'L');
+                if (aCandidate) {
+                    w4_a = aCandidate;
+                    // B wave: first HIGH after A
+                    const bCandidate = postW3Pivots.find(p => p.type === 'H' && p.idx > aCandidate.idx);
+                    if (bCandidate) {
+                        w4_b = bCandidate;
+                        // C wave: next low after B (or current price if still falling)
+                        const cCandidate = postW3Pivots.find(p => p.type === 'L' && p.idx > bCandidate.idx);
+                        w4_c = cCandidate || { idx: len - 1, val: currentPrice, partial: true };
+                    } else {
+                        // Only have A so far — B is not yet formed
+                        w4_b = null;
+                        w4_c = null;
+                    }
+                }
+            }
+            // If not found, synthesize A from W4 position
+            if (!w4_a && inWave4) {
+                const w4Range = w3.val - w4.val;
+                w4_a = { idx: w3.idx + Math.floor(barsSinceW3 * 0.40), val: w3.val - w4Range * 0.55 };
+                w4_b = { idx: w3.idx + Math.floor(barsSinceW3 * 0.65), val: w3.val - w4Range * 0.25 };
+                w4_c = { idx: len - 1, val: currentPrice, partial: true };
+            }
+            // W4 A-B-C completion % estimate
+            const w4pctComplete = w4_c ? Math.min(100, Math.round(((w4_c.idx - w3.idx) / Math.max(1, w4.idx - w2.idx)) * 80)) : 0;
+
+            // ── Wave 5 Sub-wave Progress (i-ii-iii-iv-v) from post-W4 pivots ──
+            const postW4Pivots = zigzagPivots.filter(p => p.idx > w4.idx);
+            let w5s1 = null, w5s2 = null, w5s3 = null, w5s4 = null;
+
+            if (postW4Pivots.length >= 2) {
+                const w5Highs = postW4Pivots.filter(p => p.type === 'H').sort((a, b) => a.idx - b.idx);
+                const w5Lows  = postW4Pivots.filter(p => p.type === 'L').sort((a, b) => a.idx - b.idx);
+                w5s1 = w5Highs[0] || null;  // sub-wave i high
+                w5s2 = w5Lows[0]  || null;  // sub-wave ii low
+                w5s3 = w5Highs[1] || null;  // sub-wave iii high
+                w5s4 = w5Lows[1]  || null;  // sub-wave iv low
+            }
+            // How far into W5 are we (% of projected W5 height)
+            const w5height = w5_0618 - w4.val;
+            const w5pctComplete = Math.min(99, Math.round(Math.max(0, currentPrice - w4.val) / Math.max(1, w5height) * 100));
+
+
+
+            // ═══════════════════════════════════════════════════════════════════
             // STEP 5: Correction targets (from W5 peak after W4 base)
             // Correction patterns: project from W5 apex → downside
             // corrTop = where the post-W5 correction starts from (the W5 target)
@@ -802,8 +883,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // ═══════════════════════════════════════════════════════════════════
             // STEP 6: SVG Drawing
             // ═══════════════════════════════════════════════════════════════════
-            const barW    = (width - padding * 2) / (len - 1);
-            const futureX = (slots) => Math.min(scaleX(len - 1) + slots * barW, width - 6);
+            // Use ewScaleX (extended domain) for all Elliott branch coordinates
+            const barW    = (width - padding * 2) / totalBars;
+            const nowX    = ewScaleX(len - 1);   // X coordinate of current bar
+            const futureX = (slots) => Math.min(ewScaleX(len - 1 + slots), width - 4);
 
             const corrFutMid = 55, corrFutEnd = 110;
             const futW5_primary = 40, futW5_equal = 60, futW5_extended = 90;
@@ -828,24 +911,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            // Impulse channel lines
+            // Impulse channel lines (use ewScaleX for extended domain)
             const chSlopeN = (scaleY(w2.val) - scaleY(w0.val));
-            const chSlopeD = (scaleX(w2.idx) - scaleX(w0.idx));
+            const chSlopeD = (ewScaleX(w2.idx) - ewScaleX(w0.idx));
             const channelSlope = chSlopeD !== 0 ? chSlopeN / chSlopeD : 0;
             const channelUpperY0   = scaleY(w1.val);
-            const channelUpperYEnd = channelUpperY0 + channelSlope * (width - scaleX(w1.idx));
+            const channelUpperYEnd = channelUpperY0 + channelSlope * (width - ewScaleX(w1.idx));
             const channelLowerY0   = scaleY(w0.val);
-            const channelLowerYEnd = channelLowerY0 + channelSlope * (width - scaleX(w0.idx));
+            const channelLowerYEnd = channelLowerY0 + channelSlope * (width - ewScaleX(w0.idx));
             const channelHtml = `
-              <line x1="${scaleX(w0.idx)}" y1="${channelLowerY0}" x2="${width}" y2="${channelLowerYEnd}"
+              <line x1="${ewScaleX(w0.idx)}" y1="${channelLowerY0}" x2="${width}" y2="${channelLowerYEnd}"
                 stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
-              <line x1="${scaleX(w1.idx)}" y1="${channelUpperY0}" x2="${width}" y2="${channelUpperYEnd}"
+              <line x1="${ewScaleX(w1.idx)}" y1="${channelUpperY0}" x2="${width}" y2="${channelUpperYEnd}"
                 stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
             `;
 
             // W5 projection defs + lines
-            // Anchor: if already into W5 (continuation mode), start from NOW; otherwise from W4
-            const projAnchorX   = scaleX(len - 1);   // always project from NOW bar
+            // Anchor: start from NOW bar (ewScaleX extended domain)
+            const projAnchorX   = nowX;   // always project from NOW bar
             const projAnchorY   = scaleY(currentPrice);
             const w5ProjectHtml = `
               <defs>
@@ -894,9 +977,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     stroke-width="1" stroke-dasharray="2,4"/>
 
               <!-- NOW line -->
-              <line x1="${scaleX(len-1)}" y1="0" x2="${scaleX(len-1)}" y2="${height}"
+              <line x1="${nowX}" y1="0" x2="${nowX}" y2="${height}"
                     stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="2,4"/>
-              <text x="${scaleX(len-1) + 3}" y="14" fill="rgba(255,255,255,0.45)" font-size="8">NOW</text>
+              <text x="${nowX + 3}" y="14" fill="rgba(255,255,255,0.45)" font-size="8">NOW</text>
             `;
 
 
@@ -943,7 +1026,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // ── 1. Zigzag A-B-C (5-3-5, sharp 61.8% retrace) ────────────────
             const zz_A = futureX(T*0.12), zz_B = futureX(T*0.22), zz_C = futureX(T*0.34);
             const zigzagPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${zz_A},${scaleY(corrTop)} L ${zz_B},${scaleY(czB_y)} L ${zz_C},${scaleY(czC_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${zz_A},${scaleY(corrTop)} L ${zz_B},${scaleY(czB_y)} L ${zz_C},${scaleY(czC_y)}`,
                 'rgba(255,80,80,1)', '1.8', '6,4', '0.88');
             const zzLbl = slbl(zz_A, corrTop, 'A','rgba(255,80,80,0.95)', true)
                         + slbl(zz_B, czB_y,   'B','rgba(255,80,80,0.95)', false)
@@ -953,7 +1036,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fl_A = futureX(T*0.38), fl_B = futureX(T*0.46), fl_C = futureX(T*0.56);
             const flatAy = corrTop - corrRange * 0.35;
             const flatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${fl_A},${scaleY(flatAy)} L ${fl_B},${scaleY(cfB_y)} L ${fl_C},${scaleY(cfC_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${fl_A},${scaleY(flatAy)} L ${fl_B},${scaleY(cfB_y)} L ${fl_C},${scaleY(cfC_y)}`,
                 'rgba(255,170,0,1)', '1.7', '7,4', '0.82');
             const flLbl = slbl(fl_A, flatAy, 'A','rgba(255,170,0,0.95)', false)
                         + slbl(fl_B, cfB_y,  'B','rgba(255,170,0,0.95)', true)
@@ -963,7 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const xf_A = futureX(T*0.58), xf_B = futureX(T*0.66), xf_C = futureX(T*0.76);
             const xfAy = corrTop - corrRange * 0.30;
             const expFlatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${xf_A},${scaleY(xfAy)} L ${xf_B},${scaleY(cxB_y)} L ${xf_C},${scaleY(cxC_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${xf_A},${scaleY(xfAy)} L ${xf_B},${scaleY(cxB_y)} L ${xf_C},${scaleY(cxC_y)}`,
                 'rgba(255,224,0,1)', '1.6', '5,5', '0.80');
             const xfLbl = slbl(xf_A, xfAy,  'A','rgba(255,224,0,0.95)', false)
                         + slbl(xf_B, cxB_y, 'B','rgba(255,224,0,0.95)', true)
@@ -973,7 +1056,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const rf_A = futureX(T*0.78), rf_B = futureX(T*0.86), rf_C = futureX(T*0.95);
             const rfAy = corrTop - corrRange * 0.22;
             const runFlatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${rf_A},${scaleY(rfAy)} L ${rf_B},${scaleY(runF_B_y)} L ${rf_C},${scaleY(runF_C_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${rf_A},${scaleY(rfAy)} L ${rf_B},${scaleY(runF_B_y)} L ${rf_C},${scaleY(runF_C_y)}`,
                 'rgba(255,128,0,1)', '1.5', '4,6', '0.76');
             const rfLbl = slbl(rf_A, rfAy,       'A','rgba(255,128,0,0.9)', false)
                         + slbl(rf_B, runF_B_y,   'B','rgba(255,128,0,0.9)', true)
@@ -983,7 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const if_A = futureX(T*0.97), if_B = futureX(T*1.05), if_C = futureX(T*1.14);
             const ifAy = corrTop - corrRange * 0.28;
             const irrFlatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${if_A},${scaleY(ifAy)} L ${if_B},${scaleY(irrF_B_y)} L ${if_C},${scaleY(irrF_C_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${if_A},${scaleY(ifAy)} L ${if_B},${scaleY(irrF_B_y)} L ${if_C},${scaleY(irrF_C_y)}`,
                 'rgba(255,60,60,1)', '1.5', '3,6', '0.72');
             const ifLbl = slbl(if_A, ifAy,       'A','rgba(255,60,60,0.9)', false)
                         + slbl(if_B, irrF_B_y,   'B','rgba(255,60,60,0.9)', true)
@@ -992,7 +1075,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // ── 6. Contracting Triangle A-B-C-D-E (converging) ───────────────
             const ct_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.45, T*0.53];
             const ctPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(ct_ts[1])},${scaleY(triA_y)} L ${futureX(ct_ts[2])},${scaleY(triB_y)} L ${futureX(ct_ts[3])},${scaleY(triC_y)} L ${futureX(ct_ts[4])},${scaleY(triD_y)} L ${futureX(ct_ts[5])},${scaleY(triE_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${futureX(ct_ts[1])},${scaleY(triA_y)} L ${futureX(ct_ts[2])},${scaleY(triB_y)} L ${futureX(ct_ts[3])},${scaleY(triC_y)} L ${futureX(ct_ts[4])},${scaleY(triD_y)} L ${futureX(ct_ts[5])},${scaleY(triE_y)}`,
                 'rgba(180,100,255,1)', '1.6', '3,5', '0.82');
             const ctLbl = slbl(futureX(ct_ts[1]), triA_y, 'A','rgba(180,100,255,0.95)', true)
                         + slbl(futureX(ct_ts[2]), triB_y, 'B','rgba(180,100,255,0.95)', false)
@@ -1005,7 +1088,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   rtD_y = corrTop-corrRange*0.15, rtE_y = corrTop+corrRange*0.02;
             const rt_ts = [T*0.55, T*0.63, T*0.71, T*0.79, T*0.87, T*0.94];
             const runTriPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(rt_ts[1])},${scaleY(rtA_y)} L ${futureX(rt_ts[2])},${scaleY(rtB_y)} L ${futureX(rt_ts[3])},${scaleY(rtC_y)} L ${futureX(rt_ts[4])},${scaleY(rtD_y)} L ${futureX(rt_ts[5])},${scaleY(rtE_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${futureX(rt_ts[1])},${scaleY(rtA_y)} L ${futureX(rt_ts[2])},${scaleY(rtB_y)} L ${futureX(rt_ts[3])},${scaleY(rtC_y)} L ${futureX(rt_ts[4])},${scaleY(rtD_y)} L ${futureX(rt_ts[5])},${scaleY(rtE_y)}`,
                 'rgba(140,200,255,1)', '1.5', '4,6', '0.75');
             const rtLbl = slbl(futureX(rt_ts[1]), rtA_y, 'A','rgba(140,200,255,0.9)', true)
                         + slbl(futureX(rt_ts[2]), rtB_y, 'B','rgba(140,200,255,0.9)', false)
@@ -1018,7 +1101,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   btD_y = corrTop-corrRange*0.28, btE_y = corrTop;
             const bt_ts = [T*0.96, T*1.04, T*1.11, T*1.18, T*1.25, T*1.32];
             const barTriPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(bt_ts[1])},${scaleY(btA_y)} L ${futureX(bt_ts[2])},${scaleY(btB_y)} L ${futureX(bt_ts[3])},${scaleY(btC_y)} L ${futureX(bt_ts[4])},${scaleY(btD_y)} L ${futureX(bt_ts[5])},${scaleY(btE_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${futureX(bt_ts[1])},${scaleY(btA_y)} L ${futureX(bt_ts[2])},${scaleY(btB_y)} L ${futureX(bt_ts[3])},${scaleY(btC_y)} L ${futureX(bt_ts[4])},${scaleY(btD_y)} L ${futureX(bt_ts[5])},${scaleY(btE_y)}`,
                 'rgba(100,220,180,1)', '1.5', '3,7', '0.72');
             const btLbl = slbl(futureX(bt_ts[1]), btA_y, 'A','rgba(100,220,180,0.9)', true)
                         + slbl(futureX(bt_ts[2]), btB_y, 'B','rgba(100,220,180,0.9)', false)
@@ -1031,7 +1114,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   t3Y_y = corrTop-corrRange*0.56;
             const db_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.46];
             const dblPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(db_ts[1])},${scaleY(t3W_y)} L ${futureX(db_ts[2])},${scaleY(t3X1_y)} L ${futureX(db_ts[3])},${scaleY(t3Y_y)} L ${futureX(db_ts[4])},${scaleY(dblY_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${futureX(db_ts[1])},${scaleY(t3W_y)} L ${futureX(db_ts[2])},${scaleY(t3X1_y)} L ${futureX(db_ts[3])},${scaleY(t3Y_y)} L ${futureX(db_ts[4])},${scaleY(dblY_y)}`,
                 'rgba(255,20,147,1)', '1.6', '5,5', '0.78');
             const dbLbl = slbl(futureX(db_ts[1]), t3W_y,  'W','rgba(255,20,147,0.95)', false)
                         + slbl(futureX(db_ts[2]), t3X1_y, 'X','rgba(255,20,147,0.95)', true)
@@ -1042,7 +1125,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const t3X2_y = corrTop-corrRange*0.38, t3Z_y = Math.max(corrTop-corrRange*0.75, corrBase*1.01);
             const t3_ts = [T*0.48, T*0.57, T*0.66, T*0.74, T*0.83, T*0.92];
             const triThreePath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(t3_ts[1])},${scaleY(t3W_y)} L ${futureX(t3_ts[2])},${scaleY(t3X1_y)} L ${futureX(t3_ts[3])},${scaleY(t3Y_y)} L ${futureX(t3_ts[4])},${scaleY(t3X2_y)} L ${futureX(t3_ts[5])},${scaleY(t3Z_y)}`,
+                `M ${nowX},${scaleY(currentPrice)} L ${futureX(t3_ts[1])},${scaleY(t3W_y)} L ${futureX(t3_ts[2])},${scaleY(t3X1_y)} L ${futureX(t3_ts[3])},${scaleY(t3Y_y)} L ${futureX(t3_ts[4])},${scaleY(t3X2_y)} L ${futureX(t3_ts[5])},${scaleY(t3Z_y)}`,
                 'rgba(255,120,200,1)', '1.4', '2,6', '0.70');
             const t3Lbl = slbl(futureX(t3_ts[1]), t3W_y,  'W', 'rgba(255,120,200,0.9)', false)
                         + slbl(futureX(t3_ts[2]), t3X1_y, 'X', 'rgba(255,120,200,0.9)', true)
@@ -1050,23 +1133,23 @@ document.addEventListener('DOMContentLoaded', () => {
                         + slbl(futureX(t3_ts[4]), t3X2_y, 'X²','rgba(255,120,200,0.9)', true)
                         + slbl(futureX(t3_ts[5]), t3Z_y,  'Z', 'rgba(255,120,200,0.9)', false);
 
-            // Wave labels + correction sub-wave letters
+            // Wave labels + correction sub-wave letters (use ewScaleX)
             const labelsHtml = `
-                <text x="${scaleX(w0.idx)+4}" y="${scaleY(w0.val)+15}" fill="var(--neon-green)" font-size="11" font-weight="bold">(0)</text>
-                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(I)</text>
-                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">+${((w1.val-w0.val)/w0.val*100).toFixed(1)}%</text>
-                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(II)</text>
-                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w2Ret}% ret</text>
-                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(III)</text>
-                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">${w3Ext}% of I</text>
-                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(IV)</text>
-                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w4Ret}% ret</text>
-                <text x="${scaleX(len-1)+4}" y="${scaleY(currentPrice)-6}" fill="rgba(255,255,255,0.6)" font-size="9">NOW $${currentPrice.toFixed(2)}</text>
-                <text x="${scaleX(sub1.idx)+3}" y="${scaleY(sub1.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">i</text>
-                <text x="${scaleX(sub2.idx)+3}" y="${scaleY(sub2.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">ii</text>
-                <text x="${scaleX(sub3.idx)+3}" y="${scaleY(sub3.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">iii</text>
-                <text x="${scaleX(sub4.idx)+3}" y="${scaleY(sub4.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">iv</text>
-                <text x="${scaleX(sub5.idx)-14}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
+                <text x="${ewScaleX(w0.idx)+4}" y="${scaleY(w0.val)+15}" fill="var(--neon-green)" font-size="11" font-weight="bold">(0)</text>
+                <text x="${ewScaleX(w1.idx)+4}" y="${scaleY(w1.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(I)</text>
+                <text x="${ewScaleX(w1.idx)+4}" y="${scaleY(w1.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">+${((w1.val-w0.val)/w0.val*100).toFixed(1)}%</text>
+                <text x="${ewScaleX(w2.idx)+4}" y="${scaleY(w2.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(II)</text>
+                <text x="${ewScaleX(w2.idx)+4}" y="${scaleY(w2.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w2Ret}% ret</text>
+                <text x="${ewScaleX(w3.idx)+4}" y="${scaleY(w3.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(III)</text>
+                <text x="${ewScaleX(w3.idx)+4}" y="${scaleY(w3.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">${w3Ext}% of I</text>
+                <text x="${ewScaleX(w4.idx)+4}" y="${scaleY(w4.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(IV)</text>
+                <text x="${ewScaleX(w4.idx)+4}" y="${scaleY(w4.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w4Ret}% ret</text>
+                <text x="${nowX+4}" y="${scaleY(currentPrice)-6}" fill="rgba(255,255,255,0.6)" font-size="9">NOW $${currentPrice.toFixed(2)}</text>
+                <text x="${ewScaleX(sub1.idx)+3}" y="${scaleY(sub1.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">i</text>
+                <text x="${ewScaleX(sub2.idx)+3}" y="${scaleY(sub2.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">ii</text>
+                <text x="${ewScaleX(sub3.idx)+3}" y="${scaleY(sub3.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">iii</text>
+                <text x="${ewScaleX(sub4.idx)+3}" y="${scaleY(sub4.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">iv</text>
+                <text x="${ewScaleX(sub5.idx)-14}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
                 ${zzLbl}${flLbl}${xfLbl}${rfLbl}${ifLbl}${ctLbl}${rtLbl}${btLbl}${dbLbl}${t3Lbl}
             `;
 
@@ -1144,9 +1227,81 @@ document.addEventListener('DOMContentLoaded', () => {
                       font-size="7" text-anchor="middle">corrTop=$${corrTop.toFixed(2)} | base=$${corrBase.toFixed(2)}</text>
               </g>`;
 
-            // Render order: fib + channel → sub-waves → corrections → impulse → labels+table
-            svg.innerHTML += fibHtml + channelHtml + w5ProjectHtml;
+            // ── Current Active Wave Path ────────────────────────────────────────
+            // If in Wave 4: draw A-B-C correction from W3 to NOW (solid orange/red)
+            // If in Wave 5: draw partial i-ii-iii sub-wave from W4 to NOW (bright green)
+
+            let currentWavePath = null, currentWaveLabels = '';
+
+            if (inWave4 && w4_a) {
+                // Build the W4 A-B-C path up to current bar
+                let d4 = `M ${ewScaleX(w3.idx)},${scaleY(w3.val)}`;
+                d4 += ` L ${ewScaleX(w4_a.idx)},${scaleY(w4_a.val)}`;
+                if (w4_b) d4 += ` L ${ewScaleX(w4_b.idx)},${scaleY(w4_b.val)}`;
+                if (w4_c) d4 += ` L ${ewScaleX(w4_c.idx)},${scaleY(w4_c.val)}`;
+                currentWavePath = mkPath(d4, 'rgba(255,160,0,1)', '2.5', '6,3', '0.95');
+
+                // Labels for A, B, C of Wave 4
+                currentWaveLabels = `
+                    <text x="${ewScaleX(w4_a.idx)+4}" y="${scaleY(w4_a.val)+15}"
+                          fill="rgba(255,160,0,1)" font-size="11" font-weight="bold">A</text>`;
+                if (w4_b) currentWaveLabels += `
+                    <text x="${ewScaleX(w4_b.idx)+4}" y="${scaleY(w4_b.val)-8}"
+                          fill="rgba(255,160,0,1)" font-size="11" font-weight="bold">B</text>`;
+                if (w4_c) currentWaveLabels += `
+                    <text x="${ewScaleX(w4_c.idx)+4}" y="${scaleY(w4_c.val)+(w4_c.partial?-8:14)}"
+                          fill="rgba(255,160,0,1)" font-size="11" font-weight="bold">C${w4_c.partial?'…':''}</text>`;
+
+            } else if (inWave5) {
+                // Build W5 partial i-ii-iii sub-wave path from W4 to NOW
+                let d5 = `M ${ewScaleX(w4.idx)},${scaleY(w4.val)}`;
+                if (w5s1) { d5 += ` L ${ewScaleX(w5s1.idx)},${scaleY(w5s1.val)}`; }
+                if (w5s2) { d5 += ` L ${ewScaleX(w5s2.idx)},${scaleY(w5s2.val)}`; }
+                if (w5s3) { d5 += ` L ${ewScaleX(w5s3.idx)},${scaleY(w5s3.val)}`; }
+                if (w5s4) { d5 += ` L ${ewScaleX(w5s4.idx)},${scaleY(w5s4.val)}`; }
+                d5 += ` L ${nowX},${scaleY(currentPrice)}`;  // extend to NOW
+                currentWavePath = mkPath(d5, 'rgba(80,255,80,1)', '2.5', 'none', '0.95');
+
+                // Labels for i, ii, iii, iv of Wave 5
+                if (w5s1) currentWaveLabels += `<text x="${ewScaleX(w5s1.idx)+4}" y="${scaleY(w5s1.val)-8}" fill="rgba(80,255,80,0.9)" font-size="10" font-weight="bold">(i)</text>`;
+                if (w5s2) currentWaveLabels += `<text x="${ewScaleX(w5s2.idx)+4}" y="${scaleY(w5s2.val)+14}" fill="rgba(0,240,255,0.9)" font-size="10" font-weight="bold">(ii)</text>`;
+                if (w5s3) currentWaveLabels += `<text x="${ewScaleX(w5s3.idx)+4}" y="${scaleY(w5s3.val)-8}" fill="rgba(80,255,80,0.9)" font-size="10" font-weight="bold">(iii)</text>`;
+                if (w5s4) currentWaveLabels += `<text x="${ewScaleX(w5s4.idx)+4}" y="${scaleY(w5s4.val)+14}" fill="rgba(0,240,255,0.9)" font-size="10" font-weight="bold">(iv)</text>`;
+                currentWaveLabels += `<text x="${nowX+5}" y="${scaleY(currentPrice)+14}" fill="rgba(80,255,80,0.9)" font-size="10" font-weight="bold">▶(v?)</text>`;
+            }
+
+            // ── Future Canvas background shading ──────────────────────────────
+            // Subtle tinted rectangle right of NOW line to signal "projected territory"
+            const futureCanvasHtml = `
+                <rect x="${nowX+1}" y="${padding}" width="${width - nowX - 2}" height="${height - padding*2}"
+                      fill="rgba(0,200,255,0.035)" rx="0"/>
+                <line x1="${nowX}" y1="0" x2="${nowX}" y2="${height}"
+                      stroke="rgba(255,255,255,0.30)" stroke-width="1.5" stroke-dasharray="4,4"/>
+                <text x="${nowX+5}" y="16" fill="rgba(255,255,255,0.50)"
+                      font-size="9" font-weight="bold">◀ HISTORY   FUTURE →</text>
+            `;
+
+            // ── Current Wave Status Badge ──────────────────────────────────────
+            const badgeColor = inWave4 ? 'rgba(255,160,0,1)' : 'rgba(57,255,20,1)';
+            const badgeBg    = inWave4 ? 'rgba(255,140,0,0.18)' : 'rgba(57,255,20,0.12)';
+            const badgeTxt   = inWave4
+                ? `▶ WAVE [4] — A-B-C Correction  (~${w4pctComplete}% complete)`
+                : `▶ WAVE [5] — Impulse Underway  (~${w5pctComplete}% of target)`;
+            const badgeW = 310, badgeH = 22, badgeX = (width - badgeW) / 2, badgeY = height - badgeH - 6;
+            const badgeHtml = `
+                <rect x="${badgeX}" y="${badgeY}" width="${badgeW}" height="${badgeH}"
+                      fill="${badgeBg}" rx="4" stroke="${badgeColor}" stroke-width="1.2" opacity="0.95"/>
+                <text x="${badgeX + badgeW/2}" y="${badgeY + 15}"
+                      fill="${badgeColor}" font-size="10.5" font-weight="bold" text-anchor="middle">${badgeTxt}</text>
+            `;
+
+            // ── Final Render Order ─────────────────────────────────────────────
+            // Layer: future canvas bg → fib levels → channel → W5 arrows
+            //      → sub-waves (W3 internals) → current wave path (W4 or W5)
+            //      → 10 correction paths → main impulse line → labels/table/badge
+            svg.innerHTML += futureCanvasHtml + fibHtml + channelHtml + w5ProjectHtml;
             svg.appendChild(subWavePath);
+            if (currentWavePath) svg.appendChild(currentWavePath);
             svg.appendChild(zigzagPath);
             svg.appendChild(flatPath);
             svg.appendChild(expFlatPath);
@@ -1158,7 +1313,8 @@ document.addEventListener('DOMContentLoaded', () => {
             svg.appendChild(dblPath);
             svg.appendChild(triThreePath);
             svg.appendChild(ewPath);
-            svg.innerHTML += labelsHtml + legendHtml;
+            svg.innerHTML += labelsHtml + currentWaveLabels + legendHtml + badgeHtml;
+
 
             // Update DOM target display
             const targetPriceEl = document.getElementById('elliott-target-price');
@@ -1682,6 +1838,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 handleSearch(true); // silent update
             }
         }, 15000); // Poll every 15 seconds
+
+        // ── Daily EOD Auto-Refresh ─────────────────────────────────────────────
+        // Every 5 minutes, check if market just closed (4:15 PM ET).
+        // If so, do a full re-fetch to get fresh daily bar and update Elliott wave analysis.
+        const checkEODRefresh = () => {
+            if (!activeTickerStr) return;
+            const now = new Date();
+            // Convert to US/Eastern time offset (EST = UTC-5, EDT = UTC-4)
+            const utcHour = now.getUTCHours();
+            const utcMin  = now.getUTCMinutes();
+            const isDST   = (() => { const jan = new Date(now.getFullYear(),0,1); const jul = new Date(now.getFullYear(),6,1); return now.getTimezoneOffset() < Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset()); })();
+            const etOffset = isDST ? 4 : 5; // hours behind UTC
+            const etHour   = (utcHour - etOffset + 24) % 24;
+            const etMin    = utcMin;
+            // Trigger between 4:15 PM and 4:20 PM ET
+            if (etHour === 16 && etMin >= 15 && etMin < 20) {
+                console.log('[Elliott] EOD auto-refresh triggered for', activeTickerStr);
+                handleSearch(true); // silent re-fetch with fresh EOD data
+            }
+        };
+        setInterval(checkEODRefresh, 5 * 60 * 1000); // check every 5 minutes
     };
 
     searchBtn.addEventListener('click', handleSearchClick);
