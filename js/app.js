@@ -983,28 +983,28 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
 
 
-            // Sub-wave path inside Wave III
+            // Sub-wave path inside Wave III (use ewScaleX)
             const subWavePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             subWavePath.setAttribute('d',
-                `M ${scaleX(w2.idx)},${scaleY(w2.val)}
-                 L ${scaleX(sub1.idx)},${scaleY(sub1.val)}
-                 L ${scaleX(sub2.idx)},${scaleY(sub2.val)}
-                 L ${scaleX(sub3.idx)},${scaleY(sub3.val)}
-                 L ${scaleX(sub4.idx)},${scaleY(sub4.val)}
-                 L ${scaleX(sub5.idx)},${scaleY(sub5.val)}`);
+                `M ${ewScaleX(w2.idx)},${scaleY(w2.val)}
+                 L ${ewScaleX(sub1.idx)},${scaleY(sub1.val)}
+                 L ${ewScaleX(sub2.idx)},${scaleY(sub2.val)}
+                 L ${ewScaleX(sub3.idx)},${scaleY(sub3.val)}
+                 L ${ewScaleX(sub4.idx)},${scaleY(sub4.val)}
+                 L ${ewScaleX(sub5.idx)},${scaleY(sub5.val)}`);
             subWavePath.setAttribute('stroke', 'rgba(0,240,255,0.7)');
             subWavePath.setAttribute('stroke-width', '1.4');
             subWavePath.setAttribute('stroke-dasharray', '5,3');
             subWavePath.setAttribute('fill', 'none');
 
-            // Main 5-wave impulse line (W0→W4)
+            // Main 5-wave impulse line (W0→W4) — use ewScaleX
             const ewPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             ewPath.setAttribute('d',
-                `M ${scaleX(w0.idx)},${scaleY(w0.val)}
-                 L ${scaleX(w1.idx)},${scaleY(w1.val)}
-                 L ${scaleX(w2.idx)},${scaleY(w2.val)}
-                 L ${scaleX(w3.idx)},${scaleY(w3.val)}
-                 L ${scaleX(w4.idx)},${scaleY(w4.val)}`);
+                `M ${ewScaleX(w0.idx)},${scaleY(w0.val)}
+                 L ${ewScaleX(w1.idx)},${scaleY(w1.val)}
+                 L ${ewScaleX(w2.idx)},${scaleY(w2.val)}
+                 L ${ewScaleX(w3.idx)},${scaleY(w3.val)}
+                 L ${ewScaleX(w4.idx)},${scaleY(w4.val)}`);
             ewPath.setAttribute('stroke', 'var(--neon-green)');
             ewPath.setAttribute('stroke-width', '2.5');
             ewPath.setAttribute('fill', 'none');
@@ -1020,118 +1020,114 @@ document.addEventListener('DOMContentLoaded', () => {
             const slbl = (fx, price, ch, color, above) =>
                 `<text x="${fx-4}" y="${scaleY(price)+(above?-7:14)}" fill="${color}" font-size="8" font-weight="bold" opacity="0.92">${ch}</text>`;
 
-            // Shared time-slots for corrections (spread across right side)
-            const T = 130; // total future slot budget
+            // ─────────────────────────────────────────────────────────────────────
+            // FUTURE CANVAS: 3 CLEAN SCENARIO ZONES instead of 10 overlapping paths
+            // Each zone is a horizontal band showing a price range at a future date.
+            // Colors: red=bear/deep correction, amber=neutral/shallow, green=W5 extension
+            // ─────────────────────────────────────────────────────────────────────
 
-            // ── 1. Zigzag A-B-C (5-3-5, sharp 61.8% retrace) ────────────────
-            const zz_A = futureX(T*0.12), zz_B = futureX(T*0.22), zz_C = futureX(T*0.34);
-            const zigzagPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${zz_A},${scaleY(corrTop)} L ${zz_B},${scaleY(czB_y)} L ${zz_C},${scaleY(czC_y)}`,
-                'rgba(255,80,80,1)', '1.8', '6,4', '0.88');
-            const zzLbl = slbl(zz_A, corrTop, 'A','rgba(255,80,80,0.95)', true)
-                        + slbl(zz_B, czB_y,   'B','rgba(255,80,80,0.95)', false)
-                        + slbl(zz_C, czC_y,   'C','rgba(255,80,80,0.95)', false);
+            // Derive 3-scenario zone values from already-declared Step 5 variables
+            const deepCorrPrice    = czC_y;     // Zigzag: 61.8% retrace (already from Step 5)
+            const shallowCorrPrice = Math.max(corrTop - corrRange * 0.236, corrBase * 1.01); // Flat: ~23.6%
 
-            // ── 2. Flat A-B-C (3-3-5, B nearly equals A, C shallow) ──────────
-            const fl_A = futureX(T*0.38), fl_B = futureX(T*0.46), fl_C = futureX(T*0.56);
-            const flatAy = corrTop - corrRange * 0.35;
-            const flatPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${fl_A},${scaleY(flatAy)} L ${fl_B},${scaleY(cfB_y)} L ${fl_C},${scaleY(cfC_y)}`,
-                'rgba(255,170,0,1)', '1.7', '7,4', '0.82');
-            const flLbl = slbl(fl_A, flatAy, 'A','rgba(255,170,0,0.95)', false)
-                        + slbl(fl_B, cfB_y,  'B','rgba(255,170,0,0.95)', true)
-                        + slbl(fl_C, cfC_y,  'C','rgba(255,170,0,0.95)', false);
+            // Future time slots for the 3-zone canvas
+            const nearSlot  = FUTURE_BARS * 0.25;   // ~30 bars ahead
+            const midSlot   = FUTURE_BARS * 0.55;   // ~65 bars ahead
+            const farSlot   = FUTURE_BARS * 0.85;   // ~100 bars ahead
 
-            // ── 3. Expanded Flat (3-3-5, B exceeds W5, C deep 78.6%) ─────────
-            const xf_A = futureX(T*0.58), xf_B = futureX(T*0.66), xf_C = futureX(T*0.76);
-            const xfAy = corrTop - corrRange * 0.30;
-            const expFlatPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${xf_A},${scaleY(xfAy)} L ${xf_B},${scaleY(cxB_y)} L ${xf_C},${scaleY(cxC_y)}`,
-                'rgba(255,224,0,1)', '1.6', '5,5', '0.80');
-            const xfLbl = slbl(xf_A, xfAy,  'A','rgba(255,224,0,0.95)', false)
-                        + slbl(xf_B, cxB_y, 'B','rgba(255,224,0,0.95)', true)
-                        + slbl(xf_C, cxC_y, 'C','rgba(255,224,0,0.95)', false);
+            const fxNear = futureX(nearSlot);
+            const fxMid  = futureX(midSlot);
+            const fxFar  = futureX(farSlot);
 
-            // ── 4. Running Flat (B spikes high, C fails to complete) ──────────
-            const rf_A = futureX(T*0.78), rf_B = futureX(T*0.86), rf_C = futureX(T*0.95);
-            const rfAy = corrTop - corrRange * 0.22;
-            const runFlatPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${rf_A},${scaleY(rfAy)} L ${rf_B},${scaleY(runF_B_y)} L ${rf_C},${scaleY(runF_C_y)}`,
-                'rgba(255,128,0,1)', '1.5', '4,6', '0.76');
-            const rfLbl = slbl(rf_A, rfAy,       'A','rgba(255,128,0,0.9)', false)
-                        + slbl(rf_B, runF_B_y,   'B','rgba(255,128,0,0.9)', true)
-                        + slbl(rf_C, runF_C_y,   'C','rgba(255,128,0,0.9)', false);
+            // ── SCENARIO 1: BULL — Wave V Extension (green zone) ─────────────────
+            // Range: from W5 min (0.618×W1) up to 1.618×W1 target
+            const bullTopPrice     = w5_1618;
+            const bullBottomPrice  = w5_0618;
+            const bullZoneHtml = `
+                <defs>
+                  <linearGradient id="bullGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="rgba(57,255,20,0.35)"/>
+                    <stop offset="100%" stop-color="rgba(57,255,20,0.05)"/>
+                  </linearGradient>
+                  <linearGradient id="bearGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="rgba(255,80,80,0.05)"/>
+                    <stop offset="100%" stop-color="rgba(255,80,80,0.35)"/>
+                  </linearGradient>
+                  <linearGradient id="neutGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="rgba(255,215,0,0.20)"/>
+                    <stop offset="100%" stop-color="rgba(255,215,0,0.05)"/>
+                  </linearGradient>
+                  <marker id="arrG2" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                    <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(57,255,20,0.9)"/></marker>
+                  <marker id="arrR2" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                    <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,80,80,0.9)"/></marker>
+                  <marker id="arrY2" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                    <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,215,0,0.9)"/></marker>
+                </defs>
 
-            // ── 5. Irregular Flat (B high, C very deep ~90%) ──────────────────
-            const if_A = futureX(T*0.97), if_B = futureX(T*1.05), if_C = futureX(T*1.14);
-            const ifAy = corrTop - corrRange * 0.28;
-            const irrFlatPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${if_A},${scaleY(ifAy)} L ${if_B},${scaleY(irrF_B_y)} L ${if_C},${scaleY(irrF_C_y)}`,
-                'rgba(255,60,60,1)', '1.5', '3,6', '0.72');
-            const ifLbl = slbl(if_A, ifAy,       'A','rgba(255,60,60,0.9)', false)
-                        + slbl(if_B, irrF_B_y,   'B','rgba(255,60,60,0.9)', true)
-                        + slbl(if_C, irrF_C_y,   'C','rgba(255,60,60,0.9)', false);
+                <!-- SCENARIO 1: W5 BULL EXTENSION ZONE (green) -->
+                <polygon
+                  points="${nowX},${scaleY(currentPrice)}
+                          ${fxNear},${scaleY(bullBottomPrice)}
+                          ${fxMid},${scaleY(bullTopPrice)}
+                          ${fxMid},${scaleY(bullBottomPrice)}"
+                  fill="url(#bullGrad)" stroke="rgba(57,255,20,0.5)" stroke-width="1" opacity="0.85"/>
+                <line x1="${nowX}" y1="${scaleY(currentPrice)}"
+                      x2="${fxNear}" y2="${scaleY(w5_equal)}"
+                      stroke="rgba(57,255,20,0.9)" stroke-width="2" stroke-dasharray="6,4"
+                      marker-end="url(#arrG2)"/>
+                <text x="${fxNear+4}" y="${scaleY(w5_equal)-8}"
+                      fill="rgba(57,255,20,1)" font-size="9.5" font-weight="bold">🟢 BULL (V) $${w5_equal.toFixed(0)}–$${bullTopPrice.toFixed(0)}</text>
 
-            // ── 6. Contracting Triangle A-B-C-D-E (converging) ───────────────
-            const ct_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.45, T*0.53];
-            const ctPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${futureX(ct_ts[1])},${scaleY(triA_y)} L ${futureX(ct_ts[2])},${scaleY(triB_y)} L ${futureX(ct_ts[3])},${scaleY(triC_y)} L ${futureX(ct_ts[4])},${scaleY(triD_y)} L ${futureX(ct_ts[5])},${scaleY(triE_y)}`,
-                'rgba(180,100,255,1)', '1.6', '3,5', '0.82');
-            const ctLbl = slbl(futureX(ct_ts[1]), triA_y, 'A','rgba(180,100,255,0.95)', true)
-                        + slbl(futureX(ct_ts[2]), triB_y, 'B','rgba(180,100,255,0.95)', false)
-                        + slbl(futureX(ct_ts[3]), triC_y, 'C','rgba(180,100,255,0.95)', true)
-                        + slbl(futureX(ct_ts[4]), triD_y, 'D','rgba(180,100,255,0.95)', false)
-                        + slbl(futureX(ct_ts[5]), triE_y, 'E','rgba(180,100,255,0.95)', true);
+                <!-- SCENARIO 2: BEAR — DEEP CORRECTION (red zone) -->
+                <polygon
+                  points="${fxNear},${scaleY(corrTop)}
+                          ${fxMid},${scaleY(corrTop)}
+                          ${fxFar},${scaleY(deepCorrPrice)}
+                          ${fxMid},${scaleY(shallowCorrPrice)}"
+                  fill="url(#bearGrad)" stroke="rgba(255,80,80,0.4)" stroke-width="1" opacity="0.80"/>
+                <line x1="${nowX}" y1="${scaleY(currentPrice)}"
+                      x2="${fxMid}" y2="${scaleY(deepCorrPrice)}"
+                      stroke="rgba(255,80,80,0.9)" stroke-width="2" stroke-dasharray="6,4"
+                      marker-end="url(#arrR2)"/>
+                <text x="${fxMid+4}" y="${scaleY(deepCorrPrice)+14}"
+                      fill="rgba(255,80,80,1)" font-size="9.5" font-weight="bold">🔴 BEAR Zigzag $${deepCorrPrice.toFixed(0)}</text>
 
-            // ── 7. Running Triangle (net-upward slant A-B-C-D-E) ─────────────
-            const rtA_y = corrTop, rtB_y = corrTop-corrRange*0.25, rtC_y = corrTop+corrRange*0.05,
-                  rtD_y = corrTop-corrRange*0.15, rtE_y = corrTop+corrRange*0.02;
-            const rt_ts = [T*0.55, T*0.63, T*0.71, T*0.79, T*0.87, T*0.94];
-            const runTriPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${futureX(rt_ts[1])},${scaleY(rtA_y)} L ${futureX(rt_ts[2])},${scaleY(rtB_y)} L ${futureX(rt_ts[3])},${scaleY(rtC_y)} L ${futureX(rt_ts[4])},${scaleY(rtD_y)} L ${futureX(rt_ts[5])},${scaleY(rtE_y)}`,
-                'rgba(140,200,255,1)', '1.5', '4,6', '0.75');
-            const rtLbl = slbl(futureX(rt_ts[1]), rtA_y, 'A','rgba(140,200,255,0.9)', true)
-                        + slbl(futureX(rt_ts[2]), rtB_y, 'B','rgba(140,200,255,0.9)', false)
-                        + slbl(futureX(rt_ts[3]), rtC_y, 'C','rgba(140,200,255,0.9)', true)
-                        + slbl(futureX(rt_ts[4]), rtD_y, 'D','rgba(140,200,255,0.9)', false)
-                        + slbl(futureX(rt_ts[5]), rtE_y, 'E','rgba(140,200,255,0.9)', true);
+                <!-- SCENARIO 3: NEUTRAL — SHALLOW FLAT (amber zone) -->
+                <polygon
+                  points="${fxNear},${scaleY(corrTop)}
+                          ${fxMid},${scaleY(corrTop)}
+                          ${fxFar},${scaleY(shallowCorrPrice)}
+                          ${fxMid},${scaleY(shallowCorrPrice)}"
+                  fill="url(#neutGrad)" stroke="rgba(255,215,0,0.3)" stroke-width="1" opacity="0.70"/>
+                <line x1="${nowX}" y1="${scaleY(currentPrice)}"
+                      x2="${fxNear}" y2="${scaleY(shallowCorrPrice)}"
+                      stroke="rgba(255,215,0,0.9)" stroke-width="2" stroke-dasharray="5,5"
+                      marker-end="url(#arrY2)"/>
+                <text x="${fxNear+4}" y="${scaleY(shallowCorrPrice)+14}"
+                      fill="rgba(255,215,0,1)" font-size="9.5" font-weight="bold">🟡 FLAT $${shallowCorrPrice.toFixed(0)}</text>
+            `;
 
-            // ── 8. Barrier Triangle (horizontal upper boundary) ───────────────
-            const btA_y = corrTop, btB_y = corrTop-corrRange*0.45, btC_y = corrTop,
-                  btD_y = corrTop-corrRange*0.28, btE_y = corrTop;
-            const bt_ts = [T*0.96, T*1.04, T*1.11, T*1.18, T*1.25, T*1.32];
-            const barTriPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${futureX(bt_ts[1])},${scaleY(btA_y)} L ${futureX(bt_ts[2])},${scaleY(btB_y)} L ${futureX(bt_ts[3])},${scaleY(btC_y)} L ${futureX(bt_ts[4])},${scaleY(btD_y)} L ${futureX(bt_ts[5])},${scaleY(btE_y)}`,
-                'rgba(100,220,180,1)', '1.5', '3,7', '0.72');
-            const btLbl = slbl(futureX(bt_ts[1]), btA_y, 'A','rgba(100,220,180,0.9)', true)
-                        + slbl(futureX(bt_ts[2]), btB_y, 'B','rgba(100,220,180,0.9)', false)
-                        + slbl(futureX(bt_ts[3]), btC_y, 'C','rgba(100,220,180,0.9)', true)
-                        + slbl(futureX(bt_ts[4]), btD_y, 'D','rgba(100,220,180,0.9)', false)
-                        + slbl(futureX(bt_ts[5]), btE_y, 'E','rgba(100,220,180,0.9)', true);
+            // Legacy path objects (keep as empty paths for compatibility with render calls below)
+            const zigzagPath   = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const flatPath     = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const expFlatPath  = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const runFlatPath  = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const irrFlatPath  = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const ctPath       = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const runTriPath   = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const barTriPath   = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const dblPath      = mkPath('M0,0', 'transparent', '0', 'none', '0');
+            const triThreePath = mkPath('M0,0', 'transparent', '0', 'none', '0');
 
-            // ── 9. Double Three W-X-Y ─────────────────────────────────────────
-            const t3W_y = corrTop-corrRange*0.38, t3X1_y = corrTop-corrRange*0.18,
-                  t3Y_y = corrTop-corrRange*0.56;
-            const db_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.46];
-            const dblPath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${futureX(db_ts[1])},${scaleY(t3W_y)} L ${futureX(db_ts[2])},${scaleY(t3X1_y)} L ${futureX(db_ts[3])},${scaleY(t3Y_y)} L ${futureX(db_ts[4])},${scaleY(dblY_y)}`,
-                'rgba(255,20,147,1)', '1.6', '5,5', '0.78');
-            const dbLbl = slbl(futureX(db_ts[1]), t3W_y,  'W','rgba(255,20,147,0.95)', false)
-                        + slbl(futureX(db_ts[2]), t3X1_y, 'X','rgba(255,20,147,0.95)', true)
-                        + slbl(futureX(db_ts[3]), t3Y_y,  'Y','rgba(255,20,147,0.95)', false)
-                        + slbl(futureX(db_ts[4]), dblY_y, '⊣','rgba(255,20,147,0.95)', false);
+            // Legacy label strings set to empty (targets table has all values)
+            const zzLbl  = '', flLbl  = '', xfLbl = '', rfLbl = '', ifLbl = '';
+            const ctLbl  = '', rtLbl  = '', btLbl = '', dbLbl = '', t3Lbl = '';
 
-            // ── 10. Triple Three W-X-Y-X-Z ───────────────────────────────────
-            const t3X2_y = corrTop-corrRange*0.38, t3Z_y = Math.max(corrTop-corrRange*0.75, corrBase*1.01);
-            const t3_ts = [T*0.48, T*0.57, T*0.66, T*0.74, T*0.83, T*0.92];
-            const triThreePath = mkPath(
-                `M ${nowX},${scaleY(currentPrice)} L ${futureX(t3_ts[1])},${scaleY(t3W_y)} L ${futureX(t3_ts[2])},${scaleY(t3X1_y)} L ${futureX(t3_ts[3])},${scaleY(t3Y_y)} L ${futureX(t3_ts[4])},${scaleY(t3X2_y)} L ${futureX(t3_ts[5])},${scaleY(t3Z_y)}`,
-                'rgba(255,120,200,1)', '1.4', '2,6', '0.70');
-            const t3Lbl = slbl(futureX(t3_ts[1]), t3W_y,  'W', 'rgba(255,120,200,0.9)', false)
-                        + slbl(futureX(t3_ts[2]), t3X1_y, 'X', 'rgba(255,120,200,0.9)', true)
-                        + slbl(futureX(t3_ts[3]), t3Y_y,  'Y', 'rgba(255,120,200,0.9)', false)
-                        + slbl(futureX(t3_ts[4]), t3X2_y, 'X²','rgba(255,120,200,0.9)', true)
-                        + slbl(futureX(t3_ts[5]), t3Z_y,  'Z', 'rgba(255,120,200,0.9)', false);
+            // (10-pattern detailed paths removed — replaced by 3 clean scenario zones above)
+            // Targets table still shows all 10 pattern price levels for reference.
+
+
 
             // Wave labels + correction sub-wave letters (use ewScaleX)
             const labelsHtml = `
@@ -1299,7 +1295,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Layer: future canvas bg → fib levels → channel → W5 arrows
             //      → sub-waves (W3 internals) → current wave path (W4 or W5)
             //      → 10 correction paths → main impulse line → labels/table/badge
-            svg.innerHTML += futureCanvasHtml + fibHtml + channelHtml + w5ProjectHtml;
+            svg.innerHTML += futureCanvasHtml + bullZoneHtml + fibHtml + channelHtml + w5ProjectHtml;
             svg.appendChild(subWavePath);
             if (currentWavePath) svg.appendChild(currentWavePath);
             svg.appendChild(zigzagPath);
