@@ -5,6 +5,11 @@ import ssl
 import os
 import mimetypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handles each request in a separate thread."""
+    daemon_threads = True
 from urllib.parse import urlparse, parse_qs
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -169,7 +174,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Not Found")
 
 if __name__ == '__main__':
-    server = HTTPServer(('0.0.0.0', PORT), ProxyHandler)
+    server = ThreadedHTTPServer(('0.0.0.0', PORT), ProxyHandler)
     print(f"=================================================")
     print(f" Python Zero-Dependency Proxy Server Started!")
     print(f" Listening on http://localhost:{PORT}")
