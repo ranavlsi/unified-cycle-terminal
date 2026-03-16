@@ -2,8 +2,12 @@ import json
 import urllib.request
 import urllib.error
 import ssl
+import os
+import mimetypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PORT = 8000
 
@@ -141,15 +145,34 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         else:
-            self.send_response(404)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(b"Not Found")
+            # Serve static files from the project directory
+            # Map '/' to index.html
+            file_path = parsed_path.path
+            if file_path == '/' or file_path == '':
+                file_path = '/index.html'
+            local_path = os.path.join(SCRIPT_DIR, file_path.lstrip('/'))
+            
+            if os.path.isfile(local_path):
+                mime_type, _ = mimetypes.guess_type(local_path)
+                mime_type = mime_type or 'application/octet-stream'
+                with open(local_path, 'rb') as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header('Content-type', mime_type)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                self.send_response(404)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(b"Not Found")
 
 if __name__ == '__main__':
-    server = HTTPServer(('localhost', PORT), ProxyHandler)
+    server = HTTPServer(('0.0.0.0', PORT), ProxyHandler)
     print(f"=================================================")
     print(f" Python Zero-Dependency Proxy Server Started!")
     print(f" Listening on http://localhost:{PORT}")
+    print(f" App available at: http://localhost:{PORT}/")
     print(f"=================================================")
     server.serve_forever()
