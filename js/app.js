@@ -1072,7 +1072,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // ── Targets Table (right corner) — comprehensive all-pattern ──────
             const tblW = 232, tblH = 390, tblY = 8;
-            const tblX = Math.max(width - tblW - 8, 2);
+            const tblX = 8;  // top-left corner
             const row  = (y, label, val, color, bold) =>
               `<text x="${tblX+8}" y="${tblY+y}" fill="${color}"
                 font-size="${bold?'10':'9'}" font-weight="${bold?'bold':'normal'}">${label}</text>
