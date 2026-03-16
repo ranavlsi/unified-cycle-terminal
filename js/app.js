@@ -519,355 +519,444 @@ document.addEventListener('DOMContentLoaded', () => {
             pricePath.setAttribute('opacity', '0.4');
 
             const len = prices.length;
+            const currentPrice = prices[len - 1];
 
-            // ─── Helper: find local pivot within a price slice ───────────────────────
-            const findPivot = (start, end, findMax) => {
-                let idx = start, val = prices[start] ?? (findMax ? -Infinity : Infinity);
-                for (let i = start; i <= Math.min(end, len - 1); i++) {
-                    if (prices[i] == null) continue;
-                    if (findMax ? prices[i] > val : prices[i] < val) { val = prices[i]; idx = i; }
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 1: ZigZag pivot algorithm — finds real swing highs & lows
+            // Uses a minimum % deviation to filter noise. Adapts threshold to
+            // the actual volatility of the stock (AMD swings 50%+, AAPL ~20%).
+            // ═══════════════════════════════════════════════════════════════════
+            const priceRange = maxPrice - minPrice;
+            const priceRangePct = priceRange / (minPrice || 1);
+            // Adaptive threshold: 3% for low-vol, up to 8% for high-vol stocks
+            const zigZagThresh = Math.min(0.08, Math.max(0.03, priceRangePct * 0.06));
+
+            const zigzagPivots = []; // { idx, val, type: 'H'|'L' }
+            let lastPivotVal = prices[0];
+            let lastPivotIdx = 0;
+            let trend = 0; // 0=unknown, 1=up, -1=down
+
+            for (let i = 1; i < len; i++) {
+                if (prices[i] == null) continue;
+                const chg = (prices[i] - lastPivotVal) / (Math.abs(lastPivotVal) || 1);
+
+                if (trend >= 0 && chg <= -zigZagThresh) {
+                    // Reversal down: record the recent high
+                    if (trend === 1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal, type: 'H' });
+                    trend = -1;
+                    lastPivotVal = prices[i];
+                    lastPivotIdx = i;
+                } else if (trend <= 0 && chg >= zigZagThresh) {
+                    // Reversal up: record the recent low
+                    if (trend === -1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal, type: 'L' });
+                    trend = 1;
+                    lastPivotVal = prices[i];
+                    lastPivotIdx = i;
+                } else {
+                    // Extend current trend if price is more extreme
+                    if ((trend === 1  && prices[i] > lastPivotVal) ||
+                        (trend === -1 && prices[i] < lastPivotVal)) {
+                        lastPivotVal = prices[i];
+                        lastPivotIdx = i;
+                    }
                 }
-                return { idx, val };
-            };
+            }
+            // Push the final pivot
+            zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal,
+                type: trend >= 0 ? 'H' : 'L' });
 
-            // ─── Find 5 Impulse Wave Pivots ──────────────────────────────────────────
-            const w0  = findPivot(0, Math.floor(len * 0.15), false);          // Wave 0: absolute low
-            const w1  = findPivot(w0.idx + 1, Math.floor(len * 0.35), true);  // Wave 1: first high
-            const w2  = findPivot(w1.idx + 1, Math.floor(len * 0.52), false); // Wave 2: first pullback
-            const w3  = findPivot(w2.idx + 1, Math.floor(len * 0.78), true);  // Wave 3: biggest impulse
-            const w4  = findPivot(w3.idx + 1, Math.floor(len * 0.93), false); // Wave 4: pullback
-            const w5e = { idx: len - 1, val: prices[len - 1] };               // Wave 5 endpoint
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 2: Find best 5-wave impulse from ZigZag pivots
+            // We need a sequence L-H-L-H-L (W0 W1 W2 W3 W4) where:
+            //   Rule A: W2 retracement > 23.6% and < 99% of W1
+            //   Rule B: W3 is not the shortest impulse wave
+            //   Rule C: W4 does not overlap W1 price territory
+            //   Rule D: W3 is typically 1.618× W1 or larger in range
+            // We try all valid combos of 5 consecutive L pivot / H pivot combos
+            // and score them, picking the best fit.
+            // ═══════════════════════════════════════════════════════════════════
+            let bestW0, bestW1, bestW2, bestW3, bestW4;
+            let bestScore = -Infinity;
+            const zLen = zigzagPivots.length;
 
-            // ─── Enforce EW Rules ────────────────────────────────────────────────────
-            const wave1H = w1.val - w0.val;
-            const wave3H = w3.val - w2.val;
-            // Rule 1: W2 cannot breach W0
-            if (w2.val <= w0.val) w2.val = w0.val + wave1H * 0.1;
-            // Rule 2: W3 not shortest
-            if (wave3H <= wave1H) { w3.val = w2.val + wave1H * 1.236; }
-            const wave3HFinal = w3.val - w2.val;
-            // Rule 3: W4 cannot enter W1 territory
-            if (w4.val <= w1.val) w4.val = w1.val + wave3HFinal * 0.1;
-            // Rule 4a: W4 max retracement 78.6% of W3
-            const w4MaxRetrace = w3.val - wave3HFinal * 0.786;
-            if (w4.val < w4MaxRetrace) w4.val = w4MaxRetrace;
+            // Find sequences of 5 pivots that form L-H-L-H-L for a bullish impulse
+            for (let i = 0; i <= zLen - 5; i++) {
+                const p0 = zigzagPivots[i];
+                const p1 = zigzagPivots[i+1];
+                const p2 = zigzagPivots[i+2];
+                const p3 = zigzagPivots[i+3];
+                const p4 = zigzagPivots[i+4];
 
-            // ─── Wave V Fibonacci Targets (multiple scenarios) ──────────────────
-            const currentPrice = prices[len - 1]; // latest real price bar
-            const w5_0618   = w4.val + wave1H * 0.618;  // W5 = 0.618 × W1 (minimum)
-            const w5_equal  = w4.val + wave1H * 1.0;    // W5 = W1 (common)
-            const w5_1618   = w4.val + wave1H * 1.618;  // W5 = 1.618 × W1 (extended)
-            const w5_2618   = w4.val + wave1H * 2.618;  // W5 = 2.618 × W1 (rare extension)
-            const w5TargetVal = w5_0618; // primary target for layout
-            const w5ext1618   = w5_1618; // extended target
+                // Must form L-H-L-H-L
+                if (p0.type !== 'L' || p1.type !== 'H' || p2.type !== 'L' ||
+                    p3.type !== 'H' || p4.type !== 'L') continue;
 
-            // ─── Sub-waves inside Wave III (aligned to real price data) ──────────────
-            // Find actual local pivots within [w2.idx, w3.idx] for i,ii,iii,iv,v
-            const subStart = w2.idx, subEnd = w3.idx;
-            const subLen = subEnd - subStart;
-            const sub1 = findPivot(subStart, subStart + Math.floor(subLen * 0.28), true);    // sub i top
-            const sub2 = findPivot(sub1.idx, sub1.idx + Math.floor(subLen * 0.22), false);   // sub ii bottom
-            const sub3 = findPivot(sub2.idx, sub2.idx + Math.floor(subLen * 0.35), true);    // sub iii top
-            const sub4 = findPivot(sub3.idx, sub3.idx + Math.floor(subLen * 0.20), false);   // sub iv bottom
-            // sub v: must end at w3 (snap)
+                const w1h = p1.val - p0.val;  // Wave I height
+                const w2h = p1.val - p2.val;  // Wave II retracement
+                const w3h = p3.val - p2.val;  // Wave III height
+                const w4h = p3.val - p4.val;  // Wave IV retracement
+
+                if (w1h <= 0 || w3h <= 0) continue;
+
+                // Rule A: W2 retracement 23.6%–99% of W1
+                const w2ret = w2h / w1h;
+                if (w2ret < 0.236 || w2ret > 0.99) continue;
+
+                // Rule B: W3 is NOT the shortest (must be >= W1 and >= W4 approx)
+                if (w3h < w1h * 0.9) continue;
+
+                // Rule C: W4 does not enter W1 price territory (p4.val > p1.val - eps)
+                if (p4.val <= p1.val * 0.99) continue;
+
+                // Score: prefer longer, more recent waves with good W3 extension
+                const w3ext = w3h / w1h;
+                const recency = (p4.idx + p3.idx) / (2 * (len - 1)); // 0-1, prefer recent
+                const score = w3h * w3ext * (0.5 + recency);
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestW0 = p0; bestW1 = p1; bestW2 = p2; bestW3 = p3; bestW4 = p4;
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // FALLBACK: if no valid 5-wave found, use meaningful structural pivots
+            // Find the global low, global high after it, deepest pullback, biggest
+            // secondary high, and current price as W4 bottom.
+            // ═══════════════════════════════════════════════════════════════════
+            if (!bestW0) {
+                // Find overall structural low (first 60% of data)
+                let gLowIdx = 0, gLowVal = prices[0];
+                for (let i = 1; i < Math.floor(len * 0.6); i++) {
+                    if (prices[i] != null && prices[i] < gLowVal) { gLowVal = prices[i]; gLowIdx = i; }
+                }
+                // Highest high after the low (next 60%)
+                let gHighIdx = gLowIdx + 1, gHighVal = prices[gLowIdx + 1] || gLowVal;
+                for (let i = gLowIdx + 1; i < Math.floor(len * 0.95); i++) {
+                    if (prices[i] != null && prices[i] > gHighVal) { gHighVal = prices[i]; gHighIdx = i; }
+                }
+                // Deepest pullback between low and high
+                let w2Idx = gLowIdx + 1, w2Val = gHighVal;
+                for (let i = gLowIdx + 1; i < gHighIdx; i++) {
+                    if (prices[i] != null && prices[i] < w2Val) { w2Val = prices[i]; w2Idx = i; }
+                }
+                // W3 high: biggest high after W2
+                let w3Idx = w2Idx + 1, w3Val = prices[w2Idx + 1] || gHighVal;
+                for (let i = w2Idx + 1; i < Math.floor(len * 0.95); i++) {
+                    if (prices[i] != null && prices[i] > w3Val) { w3Val = prices[i]; w3Idx = i; }
+                }
+                // W4 low: deepest pull after W3
+                let w4Idx = w3Idx + 1, w4Val = prices[w3Idx + 1] || w3Val;
+                for (let i = w3Idx + 1; i < len; i++) {
+                    if (prices[i] != null && prices[i] < w4Val) { w4Val = prices[i]; w4Idx = i; }
+                }
+                // Enforce W4 doesn't violate W1 territory
+                w4Val = Math.max(w4Val, gHighVal * 1.001);
+                bestW0 = { idx: gLowIdx,  val: gLowVal  };
+                bestW1 = { idx: gHighIdx, val: gHighVal };
+                bestW2 = { idx: w2Idx,    val: w2Val    };
+                bestW3 = { idx: w3Idx,    val: w3Val    };
+                bestW4 = { idx: w4Idx,    val: w4Val    };
+            }
+
+            const w0 = bestW0, w1 = bestW1, w2 = bestW2, w3 = bestW3, w4 = bestW4;
+
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 3: Compute wave heights for Fibonacci projections
+            // ═══════════════════════════════════════════════════════════════════
+            const wave1H      = Math.abs(w1.val - w0.val);
+            const wave3H      = Math.abs(w3.val - w2.val);
+            const wave3HFinal = wave3H;
+
+            // W5 Fibonacci projections (from W4 base)
+            // Convention: all measured from W4 bottom (where price is heading from)
+            const w5_0618 = w4.val + wave1H * 0.618;
+            const w5_equal = w4.val + wave1H * 1.0;
+            const w5_1618 = w4.val + wave1H * 1.618;
+            const w5_2618 = w4.val + wave1H * 2.618;
+            const w5TargetVal = w5_0618;
+            const w5ext1618   = w5_1618;
+
+            // Retracement percentages for display
+            const w2Ret = Math.max(0, Math.min(100, ((w1.val - w2.val) / wave1H * 100))).toFixed(0);
+            const w3Ext = (wave3HFinal / wave1H * 100).toFixed(0);
+            const w4Ret = Math.max(0, Math.min(100, ((w3.val - w4.val) / wave3HFinal * 100))).toFixed(0);
+
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 4: Sub-waves inside Wave III using ZigZag pivots
+            // Use ZigZag pivots that fall within [w2.idx, w3.idx] range
+            // ═══════════════════════════════════════════════════════════════════
+            const subPivots = zigzagPivots.filter(p => p.idx > w2.idx && p.idx < w3.idx);
+            let sub1, sub2, sub3, sub4;
+
+            if (subPivots.length >= 4) {
+                // Use first high, first low after that, biggest high, deepest low
+                const subHighs = subPivots.filter(p => p.type === 'H').sort((a, b) => a.idx - b.idx);
+                const subLows  = subPivots.filter(p => p.type === 'L').sort((a, b) => a.idx - b.idx);
+                sub1 = subHighs[0] || { idx: w2.idx + Math.floor((w3.idx - w2.idx) * 0.25), val: w2.val + wave3HFinal * 0.22 };
+                sub2 = subLows[0]  || { idx: sub1.idx + Math.floor((w3.idx - sub1.idx) * 0.25), val: sub1.val - wave3HFinal * 0.12 };
+                sub3 = subHighs[1] || { idx: sub2.idx + Math.floor((w3.idx - sub2.idx) * 0.50), val: sub2.val + wave3HFinal * 0.45 };
+                sub4 = subLows[1]  || { idx: sub3.idx + Math.floor((w3.idx - sub3.idx) * 0.40), val: sub3.val - wave3HFinal * 0.08 };
+            } else {
+                // Synthesize from proportions if no zigzag pivots inside W3
+                const sl = w3.idx - w2.idx;
+                sub1 = { idx: w2.idx + Math.floor(sl * 0.22), val: w2.val + wave3HFinal * 0.20 };
+                sub2 = { idx: w2.idx + Math.floor(sl * 0.38), val: w2.val + wave3HFinal * 0.08 };
+                sub3 = { idx: w2.idx + Math.floor(sl * 0.62), val: w2.val + wave3HFinal * 0.62 };
+                sub4 = { idx: w2.idx + Math.floor(sl * 0.80), val: w2.val + wave3HFinal * 0.50 };
+            }
             const sub5 = { idx: w3.idx, val: w3.val };
 
-            // Enforce sub-wave rules against the real data boundaries
-            if (sub1.val <= w2.val) sub1.val = w2.val + (w3.val - w2.val) * 0.2;
-            if (sub2.val <= w2.val) sub2.val = w2.val + (w3.val - w2.val) * 0.05;
-            if (sub3.val <= sub1.val) sub3.val = sub1.val + (w3.val - w2.val) * 0.15;
-            if (sub4.val <= sub2.val) sub4.val = sub2.val + (sub3.val - sub2.val) * 0.1;
-            if (sub4.val >= sub3.val) sub4.val = sub3.val - (sub3.val - sub2.val) * 0.1;
-
-            // ─── Forward projection coordinates (beyond last bar = future) ─────────
-            // We extrapolate future x-positions past the right edge of the chart.
-            // Each future 'slot' = avg spacing between bars extended further right.
-            const barW = (width - padding * 2) / (len - 1); // pixels per bar
-            const futureX = (futSlots) => scaleX(len - 1) + futSlots * barW;
-
-            // W5 draw: from current price (last bar) toward each W5 target level
-            // The primary impulse already walked W0→W4. Now project W4→W5 targets forward.
-            // currentPrice is the live price; project upward to W5 targets.
-            // Use fractional future slots so targets spread right at roughly equal spacing.
-            const futW5_primary  = 40;  // ~40 bars ahead for primary target (0.618xW1)
-            const futW5_equal    = 60;
-            const futW5_extended = 90;
-            const futW5_rare     = 130;
-
-            // ─── Corrective patterns (start from END of current data) ────────────────
-            // All corrections start at the current last bar (where price is NOW),
-            // then project rightward into future time.
-            const corrOriginX = len - 1;  // x-start: last real price bar
-            const corrOriginY = currentPrice; // y-start: current real price
-
-            // Future slot counts for correction patterns
-            const corrFutMid = 55;   // future midpoint of correction
-            const corrFutEnd = 110;  // future end of correction
-
-            // Zigzag A-B-C: A = current high (W5 primary target), B=bounce, C=low
-            const czB_y = w5_0618 - (w5_0618 - w4.val) * 0.38;
-            const czC_y = Math.max(w4.val - (w5_0618 - w4.val) * 0.3, minPrice * 1.02);
-
-            // Flat: B retraces ~100% of A, C shallow
-            const cfB_y = w5_0618 * 0.994;
-            const cfC_y = w4.val - (w5_0618 - w4.val) * 0.06;
-
-            // Expanded Flat: B > wave 5 high, C deep
-            const cxB_y = w5_0618 * 1.03;
-            const cxC_y = w4.val - (w5_0618 - w4.val) * 0.618;
-
-            // Triangle ABCDE converging
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 5: Correction targets (from W5 peak after W4 base)
+            // These project from the current bar into the future
+            // ═══════════════════════════════════════════════════════════════════
+            // All corrections measure from W5 primary target (w5_0618)
+            const corrRange   = w5_0618 - w4.val;                             // expected W5 range
+            const czC_y  = Math.max(w4.val - corrRange * 0.382, minPrice * 1.02); // Zigzag: 61.8% retrace of W5
+            const cfC_y  = Math.max(w4.val - corrRange * 0.05,  minPrice * 1.02); // Flat: shallow near W4
+            const cxC_y  = Math.max(w4.val - corrRange * 0.618, minPrice * 1.02); // Exp Flat: deep 61.8%
+            const czB_y  = w5_0618 - corrRange * 0.38;
+            const cfB_y  = w5_0618 * 0.994;
+            const cxB_y  = w5_0618 * 1.03;
             const triA_y = w5_0618;
             const triB_y = czB_y;
             const triC_y = triA_y - (triA_y - triB_y) * 0.72;
             const triD_y = triB_y + (triA_y - triB_y) * 0.30;
-            const triE_y = triC_y + (triC_y - triD_y) * 0.4;
+            const triE_y = triC_y + (triC_y - triD_y) * 0.40;
+            const dblX1_y = w5_0618 - corrRange * 0.55;
+            const dblX_y  = w5_0618 - corrRange * 0.22;
+            const dblY_y  = Math.max(w4.val - corrRange * 0.55, minPrice * 1.02);
 
-            // Double Zigzag WXY
-            const dblX1_y = w5_0618 - (w5_0618 - w4.val) * 0.55;
-            const dblX_y  = w5_0618 - (w5_0618 - w4.val) * 0.22;
-            const dblY_y  = Math.max(w4.val - (w5_0618 - w4.val) * 0.55, minPrice * 1.02);
+            // ═══════════════════════════════════════════════════════════════════
+            // STEP 6: SVG Drawing
+            // ═══════════════════════════════════════════════════════════════════
+            const barW    = (width - padding * 2) / (len - 1);
+            const futureX = (slots) => Math.min(scaleX(len - 1) + slots * barW, width - 6);
 
-            // ─── SVG Drawing ─────────────────────────────────────────────────────────
-            // Fibonacci horizontal levels
+            const corrFutMid = 55, corrFutEnd = 110;
+            const futW5_primary = 40, futW5_equal = 60, futW5_extended = 90;
+
+            // Fibonacci reference lines
             const fibLevels = [
-                { ratio: 0, price: w0.val, color: 'rgba(0,240,255,0.25)', label: '0%' },
-                { ratio: 0.236, price: w0.val + wave1H * 0.236 * 5, color: 'rgba(0,240,255,0.15)', label: '23.6%' },
-                { ratio: 0.382, price: w3.val - (w3.val - w4.val) * 1.618, color: 'rgba(255,215,0,0.2)', label: '38.2% W4' },
-                { ratio: 0.618, price: w3.val - (w3.val - w4.val) * 0.618, color: 'rgba(57,255,20,0.2)', label: '61.8% W4' },
-                { ratio: 1, price: w3.val, color: 'rgba(0,240,255,0.25)', label: 'W3 High' },
+                { price: w0.val,  color: 'rgba(0,240,255,0.22)', label: 'W0 Low' },
+                { price: w2.val,  color: 'rgba(0,240,255,0.18)', label: 'W2 Low' },
+                { price: w3.val,  color: 'rgba(57,255,20,0.22)', label: 'W3 High' },
+                { price: w4.val,  color: 'rgba(255,215,0,0.22)', label: 'W4 Base' },
+                { price: w5_0618, color: 'rgba(57,255,20,0.30)', label: `W5 Min $${w5_0618.toFixed(0)}` },
+                { price: w5_equal,color: 'rgba(0,240,255,0.22)', label: `W5=$W1 $${w5_equal.toFixed(0)}` },
             ];
             let fibHtml = '';
             fibLevels.forEach(fl => {
                 const fy = scaleY(fl.price);
                 if (fy >= 0 && fy <= height) {
-                    fibHtml += `<line x1="0" y1="${fy}" x2="${width}" y2="${fy}" stroke="${fl.color}" stroke-width="1" stroke-dasharray="3,6"/>
-                    <text x="4" y="${fy - 3}" fill="${fl.color.replace(/[\d.]+\)$/, '0.8)')}" font-size="9">${fl.label}</text>`;
+                    fibHtml += `<line x1="0" y1="${fy}" x2="${width}" y2="${fy}"
+                      stroke="${fl.color}" stroke-width="1" stroke-dasharray="3,6"/>
+                    <text x="4" y="${fy - 3}" fill="${fl.color.replace(/[\d.]+\)$/, '0.9)')}"
+                      font-size="9">${fl.label}</text>`;
                 }
             });
 
-            // Impulse channel lines (trendline connecting W0-W2 and W1-W3)
-            const channelSlope = (scaleY(w2.val) - scaleY(w0.val)) / (scaleX(w2.idx) - scaleX(w0.idx));
-            const channelUpperY0 = scaleY(w1.val);
+            // Impulse channel lines
+            const chSlopeN = (scaleY(w2.val) - scaleY(w0.val));
+            const chSlopeD = (scaleX(w2.idx) - scaleX(w0.idx));
+            const channelSlope = chSlopeD !== 0 ? chSlopeN / chSlopeD : 0;
+            const channelUpperY0   = scaleY(w1.val);
             const channelUpperYEnd = channelUpperY0 + channelSlope * (width - scaleX(w1.idx));
-            const channelLowerY0 = scaleY(w0.val);
+            const channelLowerY0   = scaleY(w0.val);
             const channelLowerYEnd = channelLowerY0 + channelSlope * (width - scaleX(w0.idx));
+            const channelHtml = `
+              <line x1="${scaleX(w0.idx)}" y1="${channelLowerY0}" x2="${width}" y2="${channelLowerYEnd}"
+                stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
+              <line x1="${scaleX(w1.idx)}" y1="${channelUpperY0}" x2="${width}" y2="${channelUpperYEnd}"
+                stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
+            `;
 
-            // Draw sub-waves inside Wave III (aligned to real price)
-            const subWaveD = `M ${scaleX(w2.idx)},${scaleY(w2.val)} L ${scaleX(sub1.idx)},${scaleY(sub1.val)} L ${scaleX(sub2.idx)},${scaleY(sub2.val)} L ${scaleX(sub3.idx)},${scaleY(sub3.val)} L ${scaleX(sub4.idx)},${scaleY(sub4.val)} L ${scaleX(sub5.idx)},${scaleY(sub5.val)}`;
+            // W5 projection defs + lines
+            const w5ProjectHtml = `
+              <defs>
+                <marker id="arrG" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(57,255,20,0.9)"/></marker>
+                <marker id="arrC" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(0,240,255,0.8)"/></marker>
+                <marker id="arrY" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,215,0,0.8)"/></marker>
+              </defs>
+              <!-- Primary W5 green arrow -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${futureX(futW5_primary)}" y2="${scaleY(w5_0618)}"
+                    stroke="rgba(57,255,20,0.9)" stroke-width="2.5" stroke-dasharray="7,4"
+                    marker-end="url(#arrG)"/>
+              <text x="${futureX(futW5_primary) - 42}" y="${scaleY(w5_0618) - 8}"
+                    fill="rgba(57,255,20,1)" font-size="10" font-weight="bold">(V) $${w5_0618.toFixed(2)}</text>
+
+              <!-- Equal W1 cyan -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${futureX(futW5_equal)}" y2="${scaleY(w5_equal)}"
+                    stroke="rgba(0,240,255,0.75)" stroke-width="1.8" stroke-dasharray="5,5"
+                    marker-end="url(#arrC)"/>
+              <text x="${futureX(futW5_equal) - 42}" y="${scaleY(w5_equal) - 8}"
+                    fill="rgba(0,240,255,0.9)" font-size="9" font-weight="bold">$${w5_equal.toFixed(2)}</text>
+
+              <!-- 1.618 gold -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${futureX(futW5_extended)}" y2="${scaleY(w5_1618)}"
+                    stroke="rgba(255,215,0,0.7)" stroke-width="1.5" stroke-dasharray="4,6"
+                    marker-end="url(#arrY)"/>
+              <text x="${futureX(futW5_extended) - 54}" y="${scaleY(w5_1618) - 8}"
+                    fill="rgba(255,215,0,0.9)" font-size="9" font-weight="bold">Ext $${w5_1618.toFixed(2)}</text>
+
+              <!-- Target zone box -->
+              <rect x="${scaleX(w4.idx) + 4}" y="${scaleY(w5_equal)}"
+                    width="${Math.max(2, futureX(futW5_equal) - scaleX(w4.idx) - 4)}"
+                    height="${Math.max(2, scaleY(w5_0618) - scaleY(w5_equal))}"
+                    fill="rgba(57,255,20,0.04)" stroke="rgba(57,255,20,0.2)"
+                    stroke-width="1" stroke-dasharray="2,4"/>
+
+              <!-- NOW line -->
+              <line x1="${scaleX(len-1)}" y1="0" x2="${scaleX(len-1)}" y2="${height}"
+                    stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="2,4"/>
+              <text x="${scaleX(len-1) + 3}" y="14" fill="rgba(255,255,255,0.45)" font-size="8">NOW</text>
+            `;
+
+            // Sub-wave path inside Wave III
             const subWavePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            subWavePath.setAttribute('d', subWaveD);
-            subWavePath.setAttribute('stroke', 'var(--neon-cyan)');
-            subWavePath.setAttribute('stroke-width', '1.5');
+            subWavePath.setAttribute('d',
+                `M ${scaleX(w2.idx)},${scaleY(w2.val)}
+                 L ${scaleX(sub1.idx)},${scaleY(sub1.val)}
+                 L ${scaleX(sub2.idx)},${scaleY(sub2.val)}
+                 L ${scaleX(sub3.idx)},${scaleY(sub3.val)}
+                 L ${scaleX(sub4.idx)},${scaleY(sub4.val)}
+                 L ${scaleX(sub5.idx)},${scaleY(sub5.val)}`);
+            subWavePath.setAttribute('stroke', 'rgba(0,240,255,0.7)');
+            subWavePath.setAttribute('stroke-width', '1.4');
             subWavePath.setAttribute('stroke-dasharray', '5,3');
             subWavePath.setAttribute('fill', 'none');
-            subWavePath.setAttribute('opacity', '0.9');
 
-            // Primary 5-wave impulse (historical portion W0→W4 solid, W4→W5 dashed forward)
+            // Main 5-wave impulse line (W0→W4)
             const ewPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            const ewD = `M ${scaleX(w0.idx)},${scaleY(w0.val)} L ${scaleX(w1.idx)},${scaleY(w1.val)} L ${scaleX(w2.idx)},${scaleY(w2.val)} L ${scaleX(w3.idx)},${scaleY(w3.val)} L ${scaleX(w4.idx)},${scaleY(w4.val)}`;
-            ewPath.setAttribute('d', ewD);
+            ewPath.setAttribute('d',
+                `M ${scaleX(w0.idx)},${scaleY(w0.val)}
+                 L ${scaleX(w1.idx)},${scaleY(w1.val)}
+                 L ${scaleX(w2.idx)},${scaleY(w2.val)}
+                 L ${scaleX(w3.idx)},${scaleY(w3.val)}
+                 L ${scaleX(w4.idx)},${scaleY(w4.val)}`);
             ewPath.setAttribute('stroke', 'var(--neon-green)');
             ewPath.setAttribute('stroke-width', '2.5');
             ewPath.setAttribute('fill', 'none');
 
-            // ── Wave V Projection lines (from W4 bottom → each future target) ──────
-            // These extend PAST the right edge of the chart as forward-looking arrows
-            const w5ProjectHtml = `
-              <defs>
-                <marker id="arrowGreen" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(57,255,20,0.9)"/>
-                </marker>
-                <marker id="arrowCyan" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0,240,255,0.9)"/>
-                </marker>
-              </defs>
+            // Correction scenario paths (all project from current price rightward)
+            const mkPath = (d, stroke, sw, dash, op) => {
+                const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                p.setAttribute('d', d); p.setAttribute('stroke', stroke);
+                p.setAttribute('stroke-width', sw); p.setAttribute('stroke-dasharray', dash);
+                p.setAttribute('fill', 'none'); p.setAttribute('opacity', op); return p;
+            };
 
-              <!-- W5 Primary (0.618xW1): bright green solid arrow -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
-                    x2="${Math.min(futureX(futW5_primary), width - 5)}" y2="${scaleY(w5_0618)}"
-                    stroke="rgba(57,255,20,0.9)" stroke-width="2.5" stroke-dasharray="7,4"
-                    marker-end="url(#arrowGreen)"/>
-              <text x="${Math.min(futureX(futW5_primary) - 38, width - 80)}" y="${scaleY(w5_0618) - 7}"
-                    fill="rgba(57,255,20,1)" font-size="10" font-weight="bold">(V) $${w5_0618.toFixed(2)}</text>
+            const zigzagPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)}
+                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
+                 L ${futureX(corrFutMid*0.70)},${scaleY(czB_y)}
+                 L ${futureX(corrFutEnd)},${scaleY(czC_y)}`,
+                'var(--neon-red)', '1.8', '6,4', '0.85');
 
-              <!-- W5 Equal W1: cyan dashed -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
-                    x2="${Math.min(futureX(futW5_equal), width - 5)}" y2="${scaleY(w5_equal)}"
-                    stroke="rgba(0,240,255,0.75)" stroke-width="1.8" stroke-dasharray="5,5"
-                    marker-end="url(#arrowCyan)"/>
-              <text x="${Math.min(futureX(futW5_equal) - 38, width - 80)}" y="${scaleY(w5_equal) - 7}"
-                    fill="rgba(0,240,255,0.9)" font-size="9" font-weight="bold">$${w5_equal.toFixed(2)}</text>
+            const flatPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)}
+                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
+                 L ${futureX(corrFutMid*0.70)},${scaleY(cfB_y)}
+                 L ${futureX(corrFutEnd)},${scaleY(cfC_y)}`,
+                '#ffaa00', '1.6', '8,4', '0.8');
 
-              <!-- W5 1.618xW1: gold dashed -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
-                    x2="${Math.min(futureX(futW5_extended), width - 5)}" y2="${scaleY(w5_1618)}"
-                    stroke="rgba(255,215,0,0.7)" stroke-width="1.5" stroke-dasharray="4,6"/>
-              <text x="${Math.min(futureX(futW5_extended) - 50, width - 80)}" y="${scaleY(w5_1618) - 7}"
-                    fill="rgba(255,215,0,0.9)" font-size="9" font-weight="bold">Ext $${w5_1618.toFixed(2)}</text>
+            const expFlatPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)}
+                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
+                 L ${futureX(corrFutMid*0.70)},${scaleY(cxB_y)}
+                 L ${futureX(corrFutEnd)},${scaleY(cxC_y)}`,
+                '#ffe000', '1.4', '4,6', '0.7');
 
-              <!-- W5 completion zone rectangle between 0.618 and equal W1 -->
-              <rect x="${scaleX(w4.idx) + 4}" y="${scaleY(w5_equal)}"
-                    width="${Math.min(futureX(futW5_equal) - scaleX(w4.idx) - 4, width - scaleX(w4.idx))}"
-                    height="${scaleY(w5_0618) - scaleY(w5_equal)}"
-                    fill="rgba(57,255,20,0.04)" stroke="rgba(57,255,20,0.2)" stroke-width="1" stroke-dasharray="2,4"/>
+            const triPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)}
+                 L ${futureX(corrFutMid*0.20)},${scaleY(triA_y)}
+                 L ${futureX(corrFutMid*0.40)},${scaleY(triB_y)}
+                 L ${futureX(corrFutMid*0.60)},${scaleY(triC_y)}
+                 L ${futureX(corrFutMid*0.80)},${scaleY(triD_y)}
+                 L ${futureX(corrFutMid)},${scaleY(triE_y)}`,
+                '#cc88ff', '1.4', '3,5', '0.75');
 
-              <!-- Vertical 'current price' reference line -->
-              <line x1="${scaleX(len-1)}" y1="0" x2="${scaleX(len-1)}" y2="${height}"
-                    stroke="rgba(255,255,255,0.2)" stroke-width="1" stroke-dasharray="2,4"/>
-              <text x="${scaleX(len-1) + 3}" y="14" fill="rgba(255,255,255,0.5)" font-size="8">NOW</text>
-            `;
-
-            // ── Correction scenarios (all start from last real bar → project right) ─
-            // Zigzag A-B-C
-            const zigzagPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            zigzagPath.setAttribute('d',
-              `M ${scaleX(len-1)},${scaleY(currentPrice)}
-               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
-               L ${futureX(corrFutMid * 0.7)},${scaleY(czB_y)}
-               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(czC_y)}`);
-            zigzagPath.setAttribute('stroke', 'var(--neon-red)');
-            zigzagPath.setAttribute('stroke-width', '1.8');
-            zigzagPath.setAttribute('stroke-dasharray', '6,4');
-            zigzagPath.setAttribute('fill', 'none');
-            zigzagPath.setAttribute('opacity', '0.85');
-
-            // Flat A-B-C
-            const flatPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            flatPath.setAttribute('d',
-              `M ${scaleX(len-1)},${scaleY(currentPrice)}
-               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
-               L ${futureX(corrFutMid * 0.7)},${scaleY(cfB_y)}
-               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(cfC_y)}`);
-            flatPath.setAttribute('stroke', '#ffaa00');
-            flatPath.setAttribute('stroke-width', '1.6');
-            flatPath.setAttribute('stroke-dasharray', '8,4');
-            flatPath.setAttribute('fill', 'none');
-            flatPath.setAttribute('opacity', '0.8');
-
-            // Expanded Flat
-            const expFlatPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            expFlatPath.setAttribute('d',
-              `M ${scaleX(len-1)},${scaleY(currentPrice)}
-               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
-               L ${futureX(corrFutMid * 0.7)},${scaleY(cxB_y)}
-               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(cxC_y)}`);
-            expFlatPath.setAttribute('stroke', '#ffe000');
-            expFlatPath.setAttribute('stroke-width', '1.4');
-            expFlatPath.setAttribute('stroke-dasharray', '4,6');
-            expFlatPath.setAttribute('fill', 'none');
-            expFlatPath.setAttribute('opacity', '0.7');
-
-            // Triangle ABCDE
-            const triPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            triPath.setAttribute('d',
-              `M ${scaleX(len-1)},${scaleY(currentPrice)}
-               L ${futureX(corrFutMid * 0.2)},${scaleY(triA_y)}
-               L ${futureX(corrFutMid * 0.4)},${scaleY(triB_y)}
-               L ${futureX(corrFutMid * 0.6)},${scaleY(triC_y)}
-               L ${futureX(corrFutMid * 0.8)},${scaleY(triD_y)}
-               L ${Math.min(futureX(corrFutMid), width - 4)},${scaleY(triE_y)}`);
-            triPath.setAttribute('stroke', '#cc88ff');
-            triPath.setAttribute('stroke-width', '1.4');
-            triPath.setAttribute('stroke-dasharray', '3,5');
-            triPath.setAttribute('fill', 'none');
-            triPath.setAttribute('opacity', '0.75');
-
-            // Double Zigzag WXY
-            const dblPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            dblPath.setAttribute('d',
-              `M ${scaleX(len-1)},${scaleY(currentPrice)}
-               L ${futureX(corrFutMid * 0.18)},${scaleY(w5_0618)}
-               L ${futureX(corrFutMid * 0.35)},${scaleY(dblX1_y)}
-               L ${futureX(corrFutMid * 0.52)},${scaleY(dblX_y)}
-               L ${Math.min(futureX(corrFutEnd * 0.85), width - 4)},${scaleY(dblY_y)}`);
-            dblPath.setAttribute('stroke', 'var(--neon-pink)');
-            dblPath.setAttribute('stroke-width', '1.4');
-            dblPath.setAttribute('stroke-dasharray', '2,5');
-            dblPath.setAttribute('fill', 'none');
-            dblPath.setAttribute('opacity', '0.7');
-
-            // Channel lines (impulse slope)
-            const channelHtml = `
-                <line x1="${scaleX(w0.idx)}" y1="${scaleY(w0.val)}" x2="${width}" y2="${channelLowerYEnd}" stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
-                <line x1="${scaleX(w1.idx)}" y1="${channelUpperY0}" x2="${width}" y2="${channelUpperYEnd}" stroke="rgba(0,240,255,0.18)" stroke-width="1" stroke-dasharray="4,8"/>
-            `;
+            const dblPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)}
+                 L ${futureX(corrFutMid*0.18)},${scaleY(w5_0618)}
+                 L ${futureX(corrFutMid*0.35)},${scaleY(dblX1_y)}
+                 L ${futureX(corrFutMid*0.52)},${scaleY(dblX_y)}
+                 L ${futureX(corrFutEnd*0.85)},${scaleY(dblY_y)}`,
+                'var(--neon-pink)', '1.4', '2,5', '0.7');
 
             // Wave labels
-            const w2Ret  = ((w1.val - w2.val) / wave1H * 100).toFixed(0);
-            const w3Ext  = (wave3HFinal / wave1H * 100).toFixed(0);
-            const w4Ret  = ((w3.val - w4.val) / wave3HFinal * 100).toFixed(0);
             const labelsHtml = `
-                <text x="${scaleX(w0.idx)+4}" y="${scaleY(w0.val)+15}" class="ew-label" fill="var(--neon-green)" font-size="11">(0)</text>
-                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-8}" class="ew-label" fill="var(--neon-green)" font-size="11">(I)</text>
-                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-20}" fill="rgba(57,255,20,0.6)" font-size="8">+${((w1.val-w0.val)/w0.val*100).toFixed(1)}%</text>
-                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+18}" class="ew-label" fill="var(--neon-cyan)" font-size="11">(II)</text>
-                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+30}" fill="rgba(0,240,255,0.6)" font-size="8">${w2Ret}% retrace</text>
-                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-8}" class="ew-label" fill="var(--neon-green)" font-size="11">(III)</text>
-                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-20}" fill="rgba(57,255,20,0.6)" font-size="8">${w3Ext}% of I</text>
-                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+18}" class="ew-label" fill="var(--neon-cyan)" font-size="11">(IV)</text>
-                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+30}" fill="rgba(0,240,255,0.6)" font-size="8">${w4Ret}% retrace</text>
-                <text x="${scaleX(len-1)+4}" y="${scaleY(currentPrice)-8}" class="ew-label" fill="rgba(255,255,255,0.7)" font-size="10">NOW</text>
-
+                <text x="${scaleX(w0.idx)+4}" y="${scaleY(w0.val)+15}" fill="var(--neon-green)" font-size="11" font-weight="bold">(0)</text>
+                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(I)</text>
+                <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">+${((w1.val-w0.val)/w0.val*100).toFixed(1)}%</text>
+                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(II)</text>
+                <text x="${scaleX(w2.idx)+4}" y="${scaleY(w2.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w2Ret}% ret</text>
+                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(III)</text>
+                <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-20}" fill="rgba(57,255,20,0.7)" font-size="9">${w3Ext}% of I</text>
+                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+16}" fill="var(--neon-cyan)" font-size="11" font-weight="bold">(IV)</text>
+                <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+28}" fill="rgba(0,240,255,0.7)" font-size="9">${w4Ret}% ret</text>
+                <text x="${scaleX(len-1)+4}" y="${scaleY(currentPrice)-6}" fill="rgba(255,255,255,0.6)" font-size="9">NOW $${currentPrice.toFixed(2)}</text>
                 <text x="${scaleX(sub1.idx)+3}" y="${scaleY(sub1.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">i</text>
                 <text x="${scaleX(sub2.idx)+3}" y="${scaleY(sub2.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">ii</text>
                 <text x="${scaleX(sub3.idx)+3}" y="${scaleY(sub3.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">iii</text>
                 <text x="${scaleX(sub4.idx)+3}" y="${scaleY(sub4.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">iv</text>
-                <text x="${scaleX(sub5.idx)-12}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
-
-                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 48)}" y="${scaleY(czC_y) + 14}" fill="rgba(255,50,80,0.85)" font-size="9">Zig C</text>
-                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 55)}" y="${scaleY(cfC_y) - 5}" fill="rgba(255,170,0,0.85)" font-size="9">Flat C</text>
-                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 68)}" y="${scaleY(cxC_y) + 14}" fill="rgba(255,224,0,0.85)" font-size="9">Exp.Flat C</text>
-                <text x="${Math.min(futureX(corrFutMid) - 4, width - 48)}" y="${scaleY(triE_y) + 14}" fill="rgba(204,136,255,0.85)" font-size="9">Tri E</text>
-                <text x="${Math.min(futureX(corrFutEnd * 0.85) - 4, width - 60)}" y="${scaleY(dblY_y) + 14}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
+                <text x="${scaleX(sub5.idx)-14}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
+                <text x="${futureX(corrFutEnd) - 48}" y="${scaleY(czC_y)+13}" fill="rgba(255,80,80,0.85)" font-size="9">Zig C</text>
+                <text x="${futureX(corrFutEnd) - 48}" y="${scaleY(cfC_y)-4}" fill="rgba(255,170,0,0.85)" font-size="9">Flat C</text>
+                <text x="${futureX(corrFutEnd) - 56}" y="${scaleY(cxC_y)+13}" fill="rgba(255,224,0,0.85)" font-size="9">ExpFlat</text>
+                <text x="${futureX(corrFutMid) - 48}" y="${scaleY(triE_y)+13}" fill="rgba(204,136,255,0.85)" font-size="9">Tri E</text>
+                <text x="${futureX(corrFutEnd*0.85) - 50}" y="${scaleY(dblY_y)+13}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
             `;
 
-            // ── Bold Targets Table — always anchored to right edge of SVG ────────────
-            const tblW = 212, tblH = 192, tblY = 8;
-            const tblX = Math.max(width - tblW - 10, width * 0.55); // clamp to at least 55% right
-            const row = (y, label, val, color, bold) =>
-              `<text x="${tblX + 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="${bold ? 'bold' : 'normal'}">${label}</text>
-               <text x="${tblX + tblW - 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="bold" text-anchor="end">${val}</text>`;
+            // ── Targets Table (right corner) ────────────────────────────────────
+            const tblW = 214, tblH = 196, tblY = 8;
+            const tblX = Math.max(width - tblW - 8, 2);
+            const row  = (y, label, val, color, bold) =>
+              `<text x="${tblX+8}" y="${tblY+y}" fill="${color}"
+                font-size="${bold?'10.5':'9'}" font-weight="${bold?'bold':'normal'}">${label}</text>
+               <text x="${tblX+tblW-8}" y="${tblY+y}" fill="${color}"
+                font-size="${bold?'10.5':'9'}" font-weight="bold" text-anchor="end">${val}</text>`;
 
             const legendHtml = `
               <g>
                 <rect x="${tblX}" y="${tblY}" width="${tblW}" height="${tblH}"
-                      fill="rgba(0,0,0,0.72)" rx="5" stroke="rgba(0,240,255,0.3)" stroke-width="1"/>
-
-                <!-- Header -->
-                <text x="${tblX + tblW/2}" y="${tblY + 16}" fill="rgba(0,240,255,1)"
+                      fill="rgba(0,0,0,0.75)" rx="5" stroke="rgba(0,240,255,0.35)" stroke-width="1"/>
+                <text x="${tblX+tblW/2}" y="${tblY+16}" fill="rgba(0,240,255,1)"
                       font-size="11" font-weight="bold" text-anchor="middle">⚡ PRICE TARGETS</text>
-                <line x1="${tblX + 6}" y1="${tblY + 20}" x2="${tblX + tblW - 6}" y2="${tblY + 20}"
+                <line x1="${tblX+6}" y1="${tblY+20}" x2="${tblX+tblW-6}" y2="${tblY+20}"
                       stroke="rgba(0,240,255,0.4)" stroke-width="1"/>
 
-                <!-- WAVE V UPSIDE -->
-                <text x="${tblX + 8}" y="${tblY + 33}" fill="rgba(57,255,20,0.8)"
+                <text x="${tblX+8}" y="${tblY+33}" fill="rgba(57,255,20,0.85)"
                       font-size="9" font-weight="bold">── WAVE (V) UPSIDE TARGETS ──</text>
-                ${row(46,  '▶ Primary   (0.618×W1)', '$' + w5_0618.toFixed(2), 'rgba(57,255,20,1)', true)}
-                ${row(59,  '▶ Equal W1  (1.0×W1)',   '$' + w5_equal.toFixed(2), 'rgba(0,240,255,1)', true)}
-                ${row(72,  '▶ Extended  (1.618×W1)', '$' + w5_1618.toFixed(2), 'rgba(255,215,0,1)', true)}
-                ${row(85,  '▶ Rare Ext  (2.618×W1)', '$' + w5_2618.toFixed(2), 'rgba(255,170,0,0.8)', false)}
+                ${row(46,  '▶ Min  (0.618×W1)', '$'+w5_0618.toFixed(2),  'rgba(57,255,20,1)',   true)}
+                ${row(59,  '▶ Base (1.0×W1)',   '$'+w5_equal.toFixed(2), 'rgba(0,240,255,1)',   true)}
+                ${row(72,  '▶ Ext  (1.618×W1)', '$'+w5_1618.toFixed(2),  'rgba(255,215,0,1)',   true)}
+                ${row(85,  '▶ Rare (2.618×W1)', '$'+w5_2618.toFixed(2),  'rgba(255,170,0,0.8)', false)}
 
-                <!-- DIVIDER -->
-                <line x1="${tblX + 6}" y1="${tblY + 91}" x2="${tblX + tblW - 6}" y2="${tblY + 91}"
+                <line x1="${tblX+6}" y1="${tblY+92}" x2="${tblX+tblW-6}" y2="${tblY+92}"
                       stroke="rgba(255,50,50,0.4)" stroke-width="1"/>
-
-                <!-- CORRECTION DOWNSIDE -->
-                <text x="${tblX + 8}" y="${tblY + 101}" fill="rgba(255,80,80,0.8)"
+                <text x="${tblX+8}" y="${tblY+103}" fill="rgba(255,80,80,0.85)"
                       font-size="9" font-weight="bold">── CORRECTION DOWNSIDE ──</text>
-                ${row(114, '● Zigzag C  (38.2%)',    '$' + czC_y.toFixed(2),  'rgba(255,80,80,1)',   true)}
-                ${row(127, '● Flat C    (≈W4)',      '$' + cfC_y.toFixed(2),  'rgba(255,170,0,1)',   true)}
-                ${row(140, '● Exp.Flat C (61.8%)',   '$' + cxC_y.toFixed(2),  'rgba(255,224,0,0.9)', true)}
-                ${row(153, '● Triangle E (converge)','$' + triE_y.toFixed(2), 'rgba(204,136,255,1)', false)}
-                ${row(166, '● Dbl Zigzag Y',         '$' + dblY_y.toFixed(2), 'rgba(255,20,147,0.9)',false)}
+                ${row(116, '● Zigzag C (61.8%)',   '$'+czC_y.toFixed(2),  'rgba(255,80,80,1)',    true)}
+                ${row(129, '● Flat C   (~W4)',     '$'+cfC_y.toFixed(2),  'rgba(255,170,0,1)',    true)}
+                ${row(142, '● Exp.Flat (61.8%)',   '$'+cxC_y.toFixed(2),  'rgba(255,224,0,0.9)', true)}
+                ${row(155, '● Triangle E',         '$'+triE_y.toFixed(2), 'rgba(204,136,255,1)',  false)}
+                ${row(168, '● DblZigzag Y',        '$'+dblY_y.toFixed(2), 'rgba(255,20,147,0.9)',false)}
 
-                <!-- Footer -->
-                <line x1="${tblX + 6}" y1="${tblY + 172}" x2="${tblX + tblW - 6}" y2="${tblY + 172}"
-                      stroke="rgba(0,240,255,0.2)" stroke-width="1"/>
-                <text x="${tblX + tblW/2}" y="${tblY + 183}" fill="rgba(255,255,255,0.4)"
-                      font-size="7" text-anchor="middle">Current: $${currentPrice.toFixed(2)} | W4 base: $${w4.val.toFixed(2)}</text>
+                <line x1="${tblX+6}" y1="${tblY+176}" x2="${tblX+tblW-6}" y2="${tblY+176}"
+                      stroke="rgba(0,240,255,0.15)" stroke-width="1"/>
+                <text x="${tblX+tblW/2}" y="${tblY+188}" fill="rgba(255,255,255,0.35)"
+                      font-size="7" text-anchor="middle">W1=$${w1.val.toFixed(2)} | W4=$${w4.val.toFixed(2)} | W1H=${wave1H.toFixed(2)}</text>
               </g>`;
 
+            // Render order: fib + channel → sub-waves → corrections → impulse → labels+table
             svg.innerHTML += fibHtml + channelHtml + w5ProjectHtml;
             svg.appendChild(subWavePath);
             svg.appendChild(zigzagPath);
@@ -878,15 +967,11 @@ document.addEventListener('DOMContentLoaded', () => {
             svg.appendChild(ewPath);
             svg.innerHTML += labelsHtml + legendHtml;
 
-            // Update DOM with dynamic Elliott Fibonacci target cluster
+            // Update DOM target display
             const targetPriceEl = document.getElementById('elliott-target-price');
             const targetTitleEl = document.getElementById('elliott-target-title');
-            if (targetPriceEl) {
-                targetPriceEl.textContent = `$${w5TargetVal.toFixed(2)} – $${w5ext1618.toFixed(2)}`;
-            }
-            if (targetTitleEl) {
-                targetTitleEl.textContent = `Wave (V) Zone | Ext 1.618: $${w5ext1618.toFixed(2)}`;
-            }
+            if (targetPriceEl) targetPriceEl.textContent = `$${w5TargetVal.toFixed(2)} – $${w5ext1618.toFixed(2)}`;
+            if (targetTitleEl) targetTitleEl.textContent = `Wave (V) Zone | Ext 1.618: $${w5ext1618.toFixed(2)}`;
 
         } else if (engineType === 'legacy') {
             pricePath.setAttribute('stroke', 'var(--text-main)');
