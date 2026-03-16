@@ -515,64 +515,96 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (engineType === 'elliott') {
             pricePath.setAttribute('class', 'ew-historical op-low');
             pricePath.setAttribute('stroke', 'var(--neon-cyan)');
-            pricePath.setAttribute('stroke-width', '1.5');
-            pricePath.setAttribute('opacity', '0.4');
+            pricePath.setAttribute('stroke-width', '0.8');
+            pricePath.setAttribute('opacity', '0.35');
 
             const len = prices.length;
             const currentPrice = prices[len - 1];
 
+            // ── OHLC arrays for accurate peak/trough detection ────────────────
+            const highs  = history.map(d => d.high  != null ? d.high  : d.price);
+            const lows   = history.map(d => d.low   != null ? d.low   : d.price);
+            const closes = history.map(d => d.price);
+
             // Extend the X domain to include FUTURE_BARS of empty space on the right
-            // This is the "future canvas" where projections are drawn
             const FUTURE_BARS = 120;
             const totalBars = len - 1 + FUTURE_BARS;
-            // Override scaleX for the Elliott engine only
             const ewScaleX = (idx) => padding + (idx / totalBars) * (width - padding * 2);
-            // futureX maps future slot offsets to SVG x-coord
-            // (slots are relative to the last historical bar)
+
+            // Override minPrice/maxPrice using full OHLC range so scaleY is correct
+            // This ensures wave peaks touch candle highs and troughs touch candle lows
+            const ewMinPrice = Math.min(...lows)  * 0.97;
+            const ewMaxPrice = Math.max(...highs) * 1.03;
+            const scaleY = (val) => height - padding - ((val - ewMinPrice) / (ewMaxPrice - ewMinPrice)) * (height - padding * 2);
+
+            // ── Draw OHLC bar lines (thin vertical lines, high→low per candle) ──
+            // This replaces the flat close-price line and clearly shows candle extremes
+            const ewBarW = Math.max(1, (width - padding * 2) / totalBars);
+            let ohlcHtml = '<g class="ohlc-bars" opacity="0.55">';
+            // Only render every Nth bar if there are too many bars (performance)
+            const barStep = len > 400 ? 3 : len > 200 ? 2 : 1;
+            for (let i = 0; i < len; i += barStep) {
+                const bx = ewScaleX(i);
+                const isUp = closes[i] >= (i > 0 ? closes[i-1] : closes[i]);
+                const barColor = isUp ? 'rgba(57,255,20,0.6)' : 'rgba(255,80,80,0.6)';
+                // High-low vertical line
+                ohlcHtml += `<line x1="${bx}" y1="${scaleY(highs[i])}" x2="${bx}" y2="${scaleY(lows[i])}"
+                              stroke="${barColor}" stroke-width="${Math.min(ewBarW, 1.2)}"/>`;
+                // Close tick (right side)
+                ohlcHtml += `<line x1="${bx}" y1="${scaleY(closes[i])}" x2="${bx + Math.min(ewBarW, 2.5)}" y2="${scaleY(closes[i])}"
+                              stroke="${barColor}" stroke-width="1" opacity="0.7"/>`;
+            }
+            ohlcHtml += '</g>';
 
 
             // ═══════════════════════════════════════════════════════════════════
-            // STEP 1: ZigZag pivot algorithm — finds real swing highs & lows
-            // Uses a minimum % deviation to filter noise. Adapts threshold to
-            // the actual volatility of the stock (AMD swings 50%+, AAPL ~20%).
+            // STEP 1: ZigZag pivot algorithm using OHLC highs/lows
+            // H-pivots use bar HIGH; L-pivots use bar LOW
+            // This makes wave peaks/troughs snap to actual candle extremes.
             // ═══════════════════════════════════════════════════════════════════
-            const priceRange = maxPrice - minPrice;
-            const priceRangePct = priceRange / (minPrice || 1);
-            // Adaptive threshold: 3% for low-vol, up to 8% for high-vol stocks
+            const allHigh = Math.max(...highs);
+            const allLow  = Math.min(...lows);
+            const priceRangePct = (allHigh - allLow) / (allLow || 1);
+            // Adaptive threshold: 3%–8% of total range
             const zigZagThresh = Math.min(0.08, Math.max(0.03, priceRangePct * 0.06));
 
             const zigzagPivots = []; // { idx, val, type: 'H'|'L' }
-            let lastPivotVal = prices[0];
+            let lastPivotVal = closes[0];
             let lastPivotIdx = 0;
+            let lastPivotH   = highs[0];   // track the extreme HIGH seen during up-trend
+            let lastPivotL   = lows[0];    // track the extreme LOW seen during down-trend
             let trend = 0; // 0=unknown, 1=up, -1=down
 
             for (let i = 1; i < len; i++) {
-                if (prices[i] == null) continue;
-                const chg = (prices[i] - lastPivotVal) / (Math.abs(lastPivotVal) || 1);
+                if (closes[i] == null) continue;
+                const chgFromLow  = (highs[i]  - lastPivotL) / (Math.abs(lastPivotL)  || 1);
+                const chgFromHigh = (lastPivotH - lows[i])   / (Math.abs(lastPivotH)  || 1);
 
-                if (trend >= 0 && chg <= -zigZagThresh) {
-                    // Reversal down: record the recent high
-                    if (trend === 1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal, type: 'H' });
+                if (trend >= 0 && chgFromHigh >= zigZagThresh) {
+                    // Downward reversal: record the HIGH pivot
+                    if (trend === 1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotH, type: 'H' });
                     trend = -1;
-                    lastPivotVal = prices[i];
+                    lastPivotL   = lows[i];
+                    lastPivotH   = highs[i];
+                    lastPivotVal = closes[i];
                     lastPivotIdx = i;
-                } else if (trend <= 0 && chg >= zigZagThresh) {
-                    // Reversal up: record the recent low
-                    if (trend === -1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal, type: 'L' });
+                } else if (trend <= 0 && chgFromLow >= zigZagThresh) {
+                    // Upward reversal: record the LOW pivot
+                    if (trend === -1) zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotL, type: 'L' });
                     trend = 1;
-                    lastPivotVal = prices[i];
+                    lastPivotH   = highs[i];
+                    lastPivotL   = lows[i];
+                    lastPivotVal = closes[i];
                     lastPivotIdx = i;
                 } else {
-                    // Extend current trend if price is more extreme
-                    if ((trend === 1  && prices[i] > lastPivotVal) ||
-                        (trend === -1 && prices[i] < lastPivotVal)) {
-                        lastPivotVal = prices[i];
-                        lastPivotIdx = i;
-                    }
+                    // Extend current trend to most extreme price in this direction
+                    if (trend === 1  && highs[i] > lastPivotH) { lastPivotH = highs[i]; lastPivotIdx = i; }
+                    if (trend === -1 && lows[i]  < lastPivotL) { lastPivotL = lows[i];  lastPivotIdx = i; }
                 }
             }
-            // Push the final pivot
-            zigzagPivots.push({ idx: lastPivotIdx, val: lastPivotVal,
+            // Push final pivot using appropriate extreme
+            const finalVal = trend >= 0 ? lastPivotH : lastPivotL;
+            zigzagPivots.push({ idx: lastPivotIdx, val: finalVal,
                 type: trend >= 0 ? 'H' : 'L' });
 
             // ═══════════════════════════════════════════════════════════════════
@@ -636,30 +668,30 @@ document.addEventListener('DOMContentLoaded', () => {
             // secondary high, and current price as W4 bottom.
             // ═══════════════════════════════════════════════════════════════════
             if (!bestW0) {
-                // Find overall structural low (first 60% of data)
-                let gLowIdx = 0, gLowVal = prices[0];
+                // Find overall structural low using OHLC lows (first 60% of data)
+                let gLowIdx = 0, gLowVal = lows[0];
                 for (let i = 1; i < Math.floor(len * 0.6); i++) {
-                    if (prices[i] != null && prices[i] < gLowVal) { gLowVal = prices[i]; gLowIdx = i; }
+                    if (lows[i] != null && lows[i] < gLowVal) { gLowVal = lows[i]; gLowIdx = i; }
                 }
-                // Highest high after the low (next 60%)
-                let gHighIdx = gLowIdx + 1, gHighVal = prices[gLowIdx + 1] || gLowVal;
+                // Highest HIGH after the low (next 60%)
+                let gHighIdx = gLowIdx + 1, gHighVal = highs[gLowIdx + 1] || gLowVal;
                 for (let i = gLowIdx + 1; i < Math.floor(len * 0.95); i++) {
-                    if (prices[i] != null && prices[i] > gHighVal) { gHighVal = prices[i]; gHighIdx = i; }
+                    if (highs[i] != null && highs[i] > gHighVal) { gHighVal = highs[i]; gHighIdx = i; }
                 }
-                // Deepest pullback between low and high
-                let w2Idx = gLowIdx + 1, w2Val = gHighVal;
+                // Deepest LOW between start and W1 peak
+                let w2Idx = gLowIdx + 1, w2Val = lows[gLowIdx + 1] || gHighVal;
                 for (let i = gLowIdx + 1; i < gHighIdx; i++) {
-                    if (prices[i] != null && prices[i] < w2Val) { w2Val = prices[i]; w2Idx = i; }
+                    if (lows[i] != null && lows[i] < w2Val) { w2Val = lows[i]; w2Idx = i; }
                 }
-                // W3 high: biggest high after W2
-                let w3Idx = w2Idx + 1, w3Val = prices[w2Idx + 1] || gHighVal;
+                // W3 high: biggest HIGH after W2
+                let w3Idx = w2Idx + 1, w3Val = highs[w2Idx + 1] || gHighVal;
                 for (let i = w2Idx + 1; i < Math.floor(len * 0.95); i++) {
-                    if (prices[i] != null && prices[i] > w3Val) { w3Val = prices[i]; w3Idx = i; }
+                    if (highs[i] != null && highs[i] > w3Val) { w3Val = highs[i]; w3Idx = i; }
                 }
-                // W4 low: deepest pull after W3
-                let w4Idx = w3Idx + 1, w4Val = prices[w3Idx + 1] || w3Val;
+                // W4 low: deepest LOW after W3
+                let w4Idx = w3Idx + 1, w4Val = lows[w3Idx + 1] || w3Val;
                 for (let i = w3Idx + 1; i < len; i++) {
-                    if (prices[i] != null && prices[i] < w4Val) { w4Val = prices[i]; w4Idx = i; }
+                    if (lows[i] != null && lows[i] < w4Val) { w4Val = lows[i]; w4Idx = i; }
                 }
                 // Enforce W4 doesn't violate W1 territory
                 w4Val = Math.max(w4Val, gHighVal * 1.001);
@@ -669,6 +701,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 bestW3 = { idx: w3Idx,    val: w3Val    };
                 bestW4 = { idx: w4Idx,    val: w4Val    };
             }
+
 
             const w0 = bestW0, w1 = bestW1, w2 = bestW2, w3 = bestW3, w4 = bestW4;
 
@@ -1300,7 +1333,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Layer: future canvas bg → fib levels → channel → W5 arrows
             //      → sub-waves (W3 internals) → current wave path (W4 or W5)
             //      → 10 correction paths → main impulse line → labels/table/badge
-            svg.innerHTML += futureCanvasHtml + bullZoneHtml + fibHtml + channelHtml + w5ProjectHtml;
+            svg.innerHTML += ohlcHtml + futureCanvasHtml + bullZoneHtml + fibHtml + channelHtml + w5ProjectHtml;
             svg.appendChild(subWavePath);
             if (currentWavePath) svg.appendChild(currentWavePath);
             svg.appendChild(zigzagPath);
