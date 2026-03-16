@@ -608,10 +608,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Rule C: W4 does not enter W1 price territory (p4.val > p1.val - eps)
                 if (p4.val <= p1.val * 0.99) continue;
 
-                // Score: prefer longer, more recent waves with good W3 extension
+                // Score: STRONGLY prefer more recent waves (recency^3 weight)
+                // This prevents ancient COVID-crash lows from dominating for stocks like AAPL
                 const w3ext = w3h / w1h;
-                const recency = (p4.idx + p3.idx) / (2 * (len - 1)); // 0-1, prefer recent
-                const score = w3h * w3ext * (0.5 + recency);
+                const recency = p4.idx / (len - 1); // 0→1, 1 = most recent
+                const score = w3h * w3ext * Math.pow(recency, 3);
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -669,11 +670,28 @@ document.addEventListener('DOMContentLoaded', () => {
             const wave3HFinal = wave3H;
 
             // W5 Fibonacci projections (from W4 base)
-            // Convention: all measured from W4 bottom (where price is heading from)
-            const w5_0618 = w4.val + wave1H * 0.618;
-            const w5_equal = w4.val + wave1H * 1.0;
-            const w5_1618 = w4.val + wave1H * 1.618;
-            const w5_2618 = w4.val + wave1H * 2.618;
+            // Convention: all measured from W4 bottom
+            let w5_0618 = w4.val + wave1H * 0.618;
+            let w5_equal = w4.val + wave1H * 1.0;
+            let w5_1618 = w4.val + wave1H * 1.618;
+            let w5_2618 = w4.val + wave1H * 2.618;
+
+            // ─── CONTINUATION FIX ────────────────────────────────────────────────
+            // If current price is ABOVE the 1.618 extension, the impulse pattern we
+            // found is too old. Re-anchor targets FROM current price upward using
+            // the same Fib multiples of wave1H. This correctly handles stocks like
+            // AAPL that are deep into Wave V already.
+            if (currentPrice > w5_0618) {
+                // Determine how far into W5 we already are
+                const w5progress = currentPrice - w4.val;
+                // Re-project from current price
+                const remainH = wave1H * 0.618; // base increment = 0.618 of W1
+                w5_0618  = currentPrice + remainH * 0.382; // near-term
+                w5_equal  = currentPrice + remainH * 0.618; // mid
+                w5_1618  = currentPrice + remainH * 1.0;   // extended
+                w5_2618  = currentPrice + remainH * 1.618;  // rare
+            }
+
             const w5TargetVal = w5_0618;
             const w5ext1618   = w5_1618;
 
@@ -709,24 +727,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // ═══════════════════════════════════════════════════════════════════
             // STEP 5: Correction targets (from W5 peak after W4 base)
-            // These project from the current bar into the future
-            // ═══════════════════════════════════════════════════════════════════
-            // All corrections measure from W5 primary target (w5_0618)
-            const corrRange   = w5_0618 - w4.val;                             // expected W5 range
-            const czC_y  = Math.max(w4.val - corrRange * 0.382, minPrice * 1.02); // Zigzag: 61.8% retrace of W5
-            const cfC_y  = Math.max(w4.val - corrRange * 0.05,  minPrice * 1.02); // Flat: shallow near W4
-            const cxC_y  = Math.max(w4.val - corrRange * 0.618, minPrice * 1.02); // Exp Flat: deep 61.8%
-            const czB_y  = w5_0618 - corrRange * 0.38;
-            const cfB_y  = w5_0618 * 0.994;
-            const cxB_y  = w5_0618 * 1.03;
-            const triA_y = w5_0618;
+            // Correction patterns: project from W5 apex → downside
+            // corrTop = where the post-W5 correction starts from (the W5 target)
+            // corrBase = the W4 support zone (realistic support floor)
+            // If we're in continuation mode, base it on current price
+            const corrTop  = w5_0618;                                              // W5 completion / correction START
+            const corrBase = Math.max(currentPrice * 0.75, w4.val);               // Support floor (never below 75% of current)
+            const corrRange = Math.max(corrTop - corrBase, currentPrice * 0.08);  // Min 8% range so targets are always visible
+
+            const czC_y  = Math.max(corrTop - corrRange * 0.618, corrBase * 1.01); // Zigzag: 61.8% retrace
+            const cfC_y  = Math.max(corrTop - corrRange * 0.10,  corrBase * 1.01); // Flat: ~10% shallow
+            const cxC_y  = Math.max(corrTop - corrRange * 0.786, corrBase * 1.01); // Exp Flat: deep 78.6%
+            const czB_y  = corrTop - corrRange * 0.38;
+            const cfB_y  = corrTop * 0.994;
+            const cxB_y  = corrTop * 1.03;
+            const triA_y = corrTop;
             const triB_y = czB_y;
             const triC_y = triA_y - (triA_y - triB_y) * 0.72;
             const triD_y = triB_y + (triA_y - triB_y) * 0.30;
             const triE_y = triC_y + (triC_y - triD_y) * 0.40;
-            const dblX1_y = w5_0618 - corrRange * 0.55;
-            const dblX_y  = w5_0618 - corrRange * 0.22;
-            const dblY_y  = Math.max(w4.val - corrRange * 0.55, minPrice * 1.02);
+            const dblX1_y = corrTop - corrRange * 0.55;
+            const dblX_y  = corrTop - corrRange * 0.22;
+            const dblY_y  = Math.max(corrTop - corrRange * 0.786, corrBase * 1.01);
+
 
             // ═══════════════════════════════════════════════════════════════════
             // STEP 6: SVG Drawing
@@ -773,6 +796,9 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
 
             // W5 projection defs + lines
+            // Anchor: if already into W5 (continuation mode), start from NOW; otherwise from W4
+            const projAnchorX   = scaleX(len - 1);   // always project from NOW bar
+            const projAnchorY   = scaleY(currentPrice);
             const w5ProjectHtml = `
               <defs>
                 <marker id="arrG" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
@@ -783,7 +809,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,215,0,0.8)"/></marker>
               </defs>
               <!-- Primary W5 green arrow -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+              <line x1="${projAnchorX}" y1="${projAnchorY}"
                     x2="${futureX(futW5_primary)}" y2="${scaleY(w5_0618)}"
                     stroke="rgba(57,255,20,0.9)" stroke-width="2.5" stroke-dasharray="7,4"
                     marker-end="url(#arrG)"/>
@@ -791,7 +817,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     fill="rgba(57,255,20,1)" font-size="10" font-weight="bold">(V) $${w5_0618.toFixed(2)}</text>
 
               <!-- Equal W1 cyan -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+              <line x1="${projAnchorX}" y1="${projAnchorY}"
                     x2="${futureX(futW5_equal)}" y2="${scaleY(w5_equal)}"
                     stroke="rgba(0,240,255,0.75)" stroke-width="1.8" stroke-dasharray="5,5"
                     marker-end="url(#arrC)"/>
@@ -799,7 +825,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     fill="rgba(0,240,255,0.9)" font-size="9" font-weight="bold">$${w5_equal.toFixed(2)}</text>
 
               <!-- 1.618 gold -->
-              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+              <line x1="${projAnchorX}" y1="${projAnchorY}"
                     x2="${futureX(futW5_extended)}" y2="${scaleY(w5_1618)}"
                     stroke="rgba(255,215,0,0.7)" stroke-width="1.5" stroke-dasharray="4,6"
                     marker-end="url(#arrY)"/>
@@ -807,8 +833,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     fill="rgba(255,215,0,0.9)" font-size="9" font-weight="bold">Ext $${w5_1618.toFixed(2)}</text>
 
               <!-- Target zone box -->
-              <rect x="${scaleX(w4.idx) + 4}" y="${scaleY(w5_equal)}"
-                    width="${Math.max(2, futureX(futW5_equal) - scaleX(w4.idx) - 4)}"
+              <rect x="${projAnchorX + 4}" y="${scaleY(w5_equal)}"
+                    width="${Math.max(2, futureX(futW5_equal) - projAnchorX - 4)}"
                     height="${Math.max(2, scaleY(w5_0618) - scaleY(w5_equal))}"
                     fill="rgba(57,255,20,0.04)" stroke="rgba(57,255,20,0.2)"
                     stroke-width="1" stroke-dasharray="2,4"/>
@@ -818,6 +844,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="2,4"/>
               <text x="${scaleX(len-1) + 3}" y="14" fill="rgba(255,255,255,0.45)" font-size="8">NOW</text>
             `;
+
 
             // Sub-wave path inside Wave III
             const subWavePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
