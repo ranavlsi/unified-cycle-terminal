@@ -822,8 +822,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <text x="${Math.min(futureX(corrFutEnd * 0.85) - 4, width - 60)}" y="${scaleY(dblY_y) + 14}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
             `;
 
-            // ── Bold Targets Table (top-right corner) ─────────────────────────────
-            const tblX = width - 218, tblY = 8, tblW = 210, tblH = 188;
+            // ── Bold Targets Table — always anchored to right edge of SVG ────────────
+            const tblW = 212, tblH = 192, tblY = 8;
+            const tblX = Math.max(width - tblW - 10, width * 0.55); // clamp to at least 55% right
             const row = (y, label, val, color, bold) =>
               `<text x="${tblX + 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="${bold ? 'bold' : 'normal'}">${label}</text>
                <text x="${tblX + tblW - 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="bold" text-anchor="end">${val}</text>`;
@@ -934,6 +935,69 @@ document.addEventListener('DOMContentLoaded', () => {
 
         svg.appendChild(pricePath);
     };
+
+    // ─── Mouse Drag Pan Support for all chart containers ─────────────────────
+    // Each container stores its own pan offset (in data bar units).
+    // Dragging left shows older data, dragging right shows newer data.
+    const panState = new Map(); // containerId → { isDragging, startX, startOffset }
+
+    const initPan = (container) => {
+        const containerId = container.id;
+        if (!panState.has(containerId)) {
+            panState.set(containerId, { isDragging: false, startX: 0, startOffset: 0 });
+        }
+        const svg = container.querySelector('svg');
+        if (!svg || svg.dataset.panInited) return;
+        svg.dataset.panInited = 'true';
+        svg.style.cursor = 'grab';
+
+        svg.addEventListener('mousedown', (e) => {
+            const state = panState.get(containerId);
+            if (!state || !activeHistoryData) return;
+            state.isDragging = true;
+            state.startX = e.clientX;
+            state.startOffset = zoomDomain ? zoomDomain[0] : 0;
+            svg.style.cursor = 'grabbing';
+            e.preventDefault();
+        });
+
+        svg.addEventListener('mousemove', (e) => {
+            const state = panState.get(containerId);
+            if (!state || !state.isDragging || !activeHistoryData) return;
+
+            const svgW = svg.clientWidth || 500;
+            const totalBars = activeHistoryData.length;
+            const visibleBars = zoomDomain
+                ? (zoomDomain[1] - zoomDomain[0])
+                : totalBars;
+
+            // Pixels per bar in the current view
+            const pxPerBar = (svgW - 40) / Math.max(visibleBars - 1, 1);
+            const deltaPx  = e.clientX - state.startX;
+            const deltaBar = Math.round(-deltaPx / pxPerBar); // neg px = drag right = newer data
+
+            const newStart = Math.max(0, Math.min(state.startOffset + deltaBar, totalBars - 10));
+            const newEnd   = zoomDomain ? Math.min(newStart + visibleBars, totalBars - 1) : totalBars - 1;
+
+            zoomDomain = [newStart, newEnd];
+
+            const engineType = container.getAttribute('data-engine') || 'legacy';
+            const slicedHistory = activeHistoryData.slice(newStart, newEnd + 1);
+            drawDynamicChart(containerId, slicedHistory, engineType);
+        });
+
+        const endDrag = () => {
+            const state = panState.get(containerId);
+            if (!state) return;
+            state.isDragging = false;
+            svg.style.cursor = 'grab';
+        };
+        svg.addEventListener('mouseup', endDrag);
+        svg.addEventListener('mouseleave', endDrag);
+    };
+
+    // Attach pan to all existing chart containers
+    document.querySelectorAll('.chart-container').forEach(c => initPan(c));
 
     const startSocialSentimentStream = () => {
         const hotList = document.getElementById('social-hot-list');
@@ -1271,6 +1335,13 @@ document.addEventListener('DOMContentLoaded', () => {
             drawDynamicChart('hurst-chart', visibleHistory, 'hurst');
             drawDynamicChart('elliott-chart', visibleHistory, 'elliott');
             drawDynamicChart('legacy-chart', visibleHistory, 'legacy');
+
+            // Re-attach pan listeners to refreshed SVGs
+            document.querySelectorAll('.chart-container').forEach(c => {
+                const svg = c.querySelector('svg');
+                if (svg) delete svg.dataset.panInited; // force re-init
+                initPan(c);
+            });
             
             // Re-select the SVGs to update specific pattern text nodes after re-drawing
             const updatedPatTitle = document.getElementById('pattern-title-text-svg');
