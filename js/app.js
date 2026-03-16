@@ -1124,6 +1124,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const zzLbl  = '', flLbl  = '', xfLbl = '', rfLbl = '', ifLbl = '';
             const ctLbl  = '', rtLbl  = '', btLbl = '', dbLbl = '', t3Lbl = '';
 
+            // Variables still used in the targets table (derived from corrTop/corrRange)
+            const rtE_y = corrTop - corrRange * 0.02;     // Running Triangle E ≈ near corrTop
+            const btE_y = corrTop;                         // Barrier Triangle E = corrTop
+            const t3Z_y = Math.max(corrTop - corrRange * 0.75, corrBase * 1.01); // Triple Three Z
+
             // (10-pattern detailed paths removed — replaced by 3 clean scenario zones above)
             // Targets table still shows all 10 pattern price levels for reference.
 
