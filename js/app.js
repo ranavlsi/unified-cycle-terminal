@@ -159,13 +159,24 @@ document.addEventListener('DOMContentLoaded', () => {
             const change = currentPrice - prevClose;
             
             const timestamps = data.chart.result[0].timestamp;
-            const closes = data.chart.result[0].indicators.quote[0].close;
+            const quote      = data.chart.result[0].indicators.quote[0];
+            const closes = quote.close;
+            const opens  = quote.open  || [];
+            const highs  = quote.high  || [];
+            const lows   = quote.low   || [];
             
-            // Filter out nulls
+            // Filter out nulls and include OHLC for accurate peak/trough detection
             const validData = [];
             for (let i = 0; i < closes.length; i++) {
                 if (closes[i] !== null) {
-                    validData.push({ time: timestamps[i], price: closes[i] });
+                    validData.push({
+                        time:  timestamps[i],
+                        price: closes[i],
+                        open:  opens[i]  || closes[i],
+                        high:  highs[i]  || closes[i],
+                        low:   lows[i]   || closes[i],
+                        close: closes[i]
+                    });
                 }
             }
 
@@ -631,13 +642,18 @@ document.addEventListener('DOMContentLoaded', () => {
             //   Rule D: W3 is typically 1.618× W1 or larger in range
             // We try all valid combos of 5 consecutive L pivot / H pivot combos
             // and score them, picking the best fit.
-            // ═══════════════════════════════════════════════════════════════════
+            // ── Multi-year degree bias: W0 must be near a major structural low ──
+            const globalLow  = Math.min(...lows);
+            const globalHigh = Math.max(...highs);
+            const priceSpan  = globalHigh - globalLow;
+
             let bestW0, bestW1, bestW2, bestW3, bestW4;
             let bestScore = -Infinity;
             const zLen = zigzagPivots.length;
 
             // Find sequences of 5 pivots that form L-H-L-H-L for a bullish impulse
             for (let i = 0; i <= zLen - 5; i++) {
+
                 const p0 = zigzagPivots[i];
                 const p1 = zigzagPivots[i+1];
                 const p2 = zigzagPivots[i+2];
@@ -662,14 +678,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Rule B: W3 is NOT the shortest (must be >= W1 and >= W4 approx)
                 if (w3h < w1h * 0.9) continue;
 
-                // Rule C: W4 does not enter W1 price territory (p4.val > p1.val - eps)
+                // Rule C: W4 does not enter W1 price territory
                 if (p4.val <= p1.val * 0.99) continue;
 
-                // Score: STRONGLY prefer more recent waves (recency^3 weight)
-                // This prevents ancient COVID-crash lows from dominating for stocks like AAPL
+                // Rule D (NEW): W1 must be a significant move (>=20% from W0)
+                // This filters out noise-level swings and requires a major degree wave
+                const w1gainPct = w1h / p0.val;
+                if (w1gainPct < 0.20) continue;
+
+                // ── Scoring: prefer major structural degree over recent minor swings ──
+                //
+                // 1. w0Depth: how close W0 is to the all-dataset low (0=far, 1=at global low)
+                //    This rewards sequences starting from major bear bottoms
+                const w0Depth = 1 - ((p0.val - globalLow) / (priceSpan || 1));
+
+                // 2. w3magnitude: how large is W3 in $ terms (major waves = large moves)
                 const w3ext = w3h / w1h;
-                const recency = p4.idx / (len - 1); // 0→1, 1 = most recent
-                const score = w3h * w3ext * Math.pow(recency, 3);
+                const w3gains = w3h / p2.val;  // W3 % gain from its base
+
+                // 3. Mild recency bonus — W4 should have ended (not still in future)
+                //    Use sqrt (not ^3) so old but large sequences still win
+                const recency = Math.sqrt(p4.idx / (len - 1));
+
+                // Total score:  magnitude × structural depth × mild recency
+                const score = w3h * w3ext * (1 + w0Depth * 2) * (1 + w1gainPct) * recency;
 
                 if (score > bestScore) {
                     bestScore = score;
