@@ -374,14 +374,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const padding = 20;
 
         const prices = history.map(d => d.price);
-        const minPrice = Math.min(...prices) * 0.95; // 5% buffer bottom
-        const maxPrice = Math.max(...prices) * 1.05; // 5% buffer top
+
+        // For Elliott mode: use OHLC range for scaleY so wave peaks/troughs align with candle wicks
+        // For other modes: use close prices with 5% buffer
+        let minPrice, maxPrice;
+        if (engineType === 'elliott') {
+            const ohlcHighs = history.map(d => d.high  != null ? d.high  : d.price);
+            const ohlcLows  = history.map(d => d.low   != null ? d.low   : d.price);
+            minPrice = Math.min(...ohlcLows)  * 0.97;   // 3% buffer — includes wick lows
+            maxPrice = Math.max(...ohlcHighs) * 1.03;   // 3% buffer — includes wick highs
+        } else {
+            minPrice = Math.min(...prices) * 0.95;       // 5% buffer bottom (close-based)
+            maxPrice = Math.max(...prices) * 1.05;       // 5% buffer top (close-based)
+        }
         
-        // Math scalers
+        // Math scalers — scaleY now correctly spans OHLC extremes for Elliott
         const scaleX = (idx) => padding + (idx / (history.length - 1)) * (width - padding * 2);
         const scaleY = (val) => height - padding - ((val - minPrice) / (maxPrice - minPrice)) * (height - padding * 2);
 
-        // 1. Draw standard historical price line
+        // 1. Draw standard historical price line (rebuilt below for Elliott with ewScaleX)
         let pathD = `M ${scaleX(0)},${scaleY(prices[0])}`;
         for (let i = 1; i < prices.length; i++) {
             pathD += ` L ${scaleX(i)},${scaleY(prices[i])}`;
@@ -522,6 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const currentPrice = prices[len - 1];
 
             // ── OHLC arrays for accurate peak/trough detection ────────────────
+            // Note: highs/lows already factored into minPrice/maxPrice above, so scaleY is correct
             const highs  = history.map(d => d.high  != null ? d.high  : d.price);
             const lows   = history.map(d => d.low   != null ? d.low   : d.price);
             const closes = history.map(d => d.price);
@@ -531,12 +543,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const totalBars = len - 1 + FUTURE_BARS;
             const ewScaleX = (idx) => padding + (idx / totalBars) * (width - padding * 2);
 
-            // Override minPrice/maxPrice using full OHLC range so scaleY is correct
-            // This ensures wave peaks touch candle highs and troughs touch candle lows
-            const ewMinPrice = Math.min(...lows)  * 0.97;
-            const ewMaxPrice = Math.max(...highs) * 1.03;
-            const scaleY = (val) => height - padding - ((val - ewMinPrice) / (ewMaxPrice - ewMinPrice)) * (height - padding * 2);
+            // Rebuild pricePath using ewScaleX (compressed) + correct OHLC scaleY
+            // This replaces the outer pricePath which used plain scaleX (full-width)
+            pricePath.setAttribute('d',
+                `M ${ewScaleX(0)},${scaleY(closes[0])}` +
+                closes.map((c, i) => i === 0 ? '' : ` L ${ewScaleX(i)},${scaleY(c)}`).join('')
+            );
 
+            // Override minPrice/maxPrice using full OHLC range so scaleY is correct
+            // (already done at top of drawDynamicChart via ohlcHighs/ohlcLows)
             // ── Draw OHLC bar lines (thin vertical lines, high→low per candle) ──
             // This replaces the flat close-price line and clearly shows candle extremes
             const ewBarW = Math.max(1, (width - padding * 2) / totalBars);
