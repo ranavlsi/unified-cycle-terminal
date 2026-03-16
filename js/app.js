@@ -735,20 +735,68 @@ document.addEventListener('DOMContentLoaded', () => {
             const corrBase = Math.max(currentPrice * 0.75, w4.val);               // Support floor (never below 75% of current)
             const corrRange = Math.max(corrTop - corrBase, currentPrice * 0.08);  // Min 8% range so targets are always visible
 
+            // Zigzag (5-3-5)
             const czC_y  = Math.max(corrTop - corrRange * 0.618, corrBase * 1.01); // Zigzag: 61.8% retrace
-            const cfC_y  = Math.max(corrTop - corrRange * 0.10,  corrBase * 1.01); // Flat: ~10% shallow
-            const cxC_y  = Math.max(corrTop - corrRange * 0.786, corrBase * 1.01); // Exp Flat: deep 78.6%
             const czB_y  = corrTop - corrRange * 0.38;
+
+            // Flat (3-3-5)
+            const cfC_y  = Math.max(corrTop - corrRange * 0.10,  corrBase * 1.01); // Flat: ~10% shallow
             const cfB_y  = corrTop * 0.994;
+
+            // Expanded Flat (3-3-5)
+            const cxC_y  = Math.max(corrTop - corrRange * 0.786, corrBase * 1.01); // Exp Flat: deep 78.6%
             const cxB_y  = corrTop * 1.03;
+
+            // Triangle (3-3-3-3-3)
             const triA_y = corrTop;
             const triB_y = czB_y;
             const triC_y = triA_y - (triA_y - triB_y) * 0.72;
             const triD_y = triB_y + (triA_y - triB_y) * 0.30;
             const triE_y = triC_y + (triC_y - triD_y) * 0.40;
+
+            // Double Zigzag (W-X-Y)
             const dblX1_y = corrTop - corrRange * 0.55;
             const dblX_y  = corrTop - corrRange * 0.22;
             const dblY_y  = Math.max(corrTop - corrRange * 0.786, corrBase * 1.01);
+
+            // Double Flat (W-X-Y)
+            const dblF_X1_y = corrTop * 0.99;
+            const dblF_X_y  = corrTop * 1.02;
+            const dblF_Y_y  = Math.max(corrTop - corrRange * 0.20, corrBase * 1.01);
+
+            // Triple Zigzag (W-X-Y-X-Z)
+            const tplZ_X1_y = corrTop - corrRange * 0.40;
+            const tplZ_Y_y  = corrTop - corrRange * 0.15;
+            const tplZ_X2_y = corrTop - corrRange * 0.30;
+            const tplZ_Z_y  = Math.max(corrTop - corrRange * 0.70, corrBase * 1.01);
+
+            // Triple Flat (W-X-Y-X-Z)
+            const tplF_X1_y = corrTop * 0.98;
+            const tplF_Y_y  = corrTop * 1.01;
+            const tplF_X2_y = corrTop * 0.99;
+            const tplF_Z_y  = Math.max(corrTop - corrRange * 0.15, corrBase * 1.01);
+
+            // Irregular Flat (3-3-5) - B wave goes above A
+            const irrF_B_y = corrTop * 1.05;
+            const irrF_C_y = Math.max(corrTop - corrRange * 0.70, corrBase * 1.01);
+
+            // Running Flat (3-3-5) - B wave goes above A, C wave fails to reach A
+            const runF_B_y = corrTop * 1.05;
+            const runF_C_y = corrTop - corrRange * 0.20;
+
+            // Contracting Diagonal (3-3-3-3-3)
+            const cDiag_A_y = corrTop;
+            const cDiag_B_y = corrTop - corrRange * 0.20;
+            const cDiag_C_y = corrTop - corrRange * 0.10;
+            const cDiag_D_y = corrTop - corrRange * 0.25;
+            const cDiag_E_y = corrTop - corrRange * 0.18;
+
+            // Expanding Diagonal (3-3-3-3-3)
+            const eDiag_A_y = corrTop;
+            const eDiag_B_y = corrTop - corrRange * 0.10;
+            const eDiag_C_y = corrTop - corrRange * 0.25;
+            const eDiag_D_y = corrTop - corrRange * 0.15;
+            const eDiag_E_y = corrTop - corrRange * 0.35;
 
 
             // ═══════════════════════════════════════════════════════════════════
@@ -807,6 +855,12 @@ document.addEventListener('DOMContentLoaded', () => {
                   <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(0,240,255,0.8)"/></marker>
                 <marker id="arrY" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
                   <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,215,0,0.8)"/></marker>
+                <marker id="arrR" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,80,80,0.8)"/></marker>
+                <marker id="arrO" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(255,170,0,0.8)"/></marker>
+                <marker id="arrP" markerWidth="7" markerHeight="7" refX="3" refY="3.5" orient="auto">
+                  <path d="M0,1 L6,3.5 L0,6 Z" fill="rgba(204,136,255,0.8)"/></marker>
               </defs>
               <!-- Primary W5 green arrow -->
               <line x1="${projAnchorX}" y1="${projAnchorY}"
@@ -872,53 +926,131 @@ document.addEventListener('DOMContentLoaded', () => {
             ewPath.setAttribute('stroke-width', '2.5');
             ewPath.setAttribute('fill', 'none');
 
-            // Correction scenario paths (all project from current price rightward)
+            // ── Helper: sub-wave letter at a turning point ────────────────────
             const mkPath = (d, stroke, sw, dash, op) => {
                 const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 p.setAttribute('d', d); p.setAttribute('stroke', stroke);
                 p.setAttribute('stroke-width', sw); p.setAttribute('stroke-dasharray', dash);
                 p.setAttribute('fill', 'none'); p.setAttribute('opacity', op); return p;
             };
+            // Place a sub-wave letter label (A/B/C/D/E/W/X/Y/Z)
+            const slbl = (fx, price, ch, color, above) =>
+                `<text x="${fx-4}" y="${scaleY(price)+(above?-7:14)}" fill="${color}" font-size="8" font-weight="bold" opacity="0.92">${ch}</text>`;
 
+            // Shared time-slots for corrections (spread across right side)
+            const T = 130; // total future slot budget
+
+            // ── 1. Zigzag A-B-C (5-3-5, sharp 61.8% retrace) ────────────────
+            const zz_A = futureX(T*0.12), zz_B = futureX(T*0.22), zz_C = futureX(T*0.34);
             const zigzagPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)}
-                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
-                 L ${futureX(corrFutMid*0.70)},${scaleY(czB_y)}
-                 L ${futureX(corrFutEnd)},${scaleY(czC_y)}`,
-                'var(--neon-red)', '1.8', '6,4', '0.85');
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${zz_A},${scaleY(corrTop)} L ${zz_B},${scaleY(czB_y)} L ${zz_C},${scaleY(czC_y)}`,
+                'rgba(255,80,80,1)', '1.8', '6,4', '0.88');
+            const zzLbl = slbl(zz_A, corrTop, 'A','rgba(255,80,80,0.95)', true)
+                        + slbl(zz_B, czB_y,   'B','rgba(255,80,80,0.95)', false)
+                        + slbl(zz_C, czC_y,   'C','rgba(255,80,80,0.95)', false);
 
+            // ── 2. Flat A-B-C (3-3-5, B nearly equals A, C shallow) ──────────
+            const fl_A = futureX(T*0.38), fl_B = futureX(T*0.46), fl_C = futureX(T*0.56);
+            const flatAy = corrTop - corrRange * 0.35;
             const flatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)}
-                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
-                 L ${futureX(corrFutMid*0.70)},${scaleY(cfB_y)}
-                 L ${futureX(corrFutEnd)},${scaleY(cfC_y)}`,
-                '#ffaa00', '1.6', '8,4', '0.8');
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${fl_A},${scaleY(flatAy)} L ${fl_B},${scaleY(cfB_y)} L ${fl_C},${scaleY(cfC_y)}`,
+                'rgba(255,170,0,1)', '1.7', '7,4', '0.82');
+            const flLbl = slbl(fl_A, flatAy, 'A','rgba(255,170,0,0.95)', false)
+                        + slbl(fl_B, cfB_y,  'B','rgba(255,170,0,0.95)', true)
+                        + slbl(fl_C, cfC_y,  'C','rgba(255,170,0,0.95)', false);
 
+            // ── 3. Expanded Flat (3-3-5, B exceeds W5, C deep 78.6%) ─────────
+            const xf_A = futureX(T*0.58), xf_B = futureX(T*0.66), xf_C = futureX(T*0.76);
+            const xfAy = corrTop - corrRange * 0.30;
             const expFlatPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)}
-                 L ${futureX(corrFutMid*0.38)},${scaleY(w5_0618)}
-                 L ${futureX(corrFutMid*0.70)},${scaleY(cxB_y)}
-                 L ${futureX(corrFutEnd)},${scaleY(cxC_y)}`,
-                '#ffe000', '1.4', '4,6', '0.7');
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${xf_A},${scaleY(xfAy)} L ${xf_B},${scaleY(cxB_y)} L ${xf_C},${scaleY(cxC_y)}`,
+                'rgba(255,224,0,1)', '1.6', '5,5', '0.80');
+            const xfLbl = slbl(xf_A, xfAy,  'A','rgba(255,224,0,0.95)', false)
+                        + slbl(xf_B, cxB_y, 'B','rgba(255,224,0,0.95)', true)
+                        + slbl(xf_C, cxC_y, 'C','rgba(255,224,0,0.95)', false);
 
-            const triPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)}
-                 L ${futureX(corrFutMid*0.20)},${scaleY(triA_y)}
-                 L ${futureX(corrFutMid*0.40)},${scaleY(triB_y)}
-                 L ${futureX(corrFutMid*0.60)},${scaleY(triC_y)}
-                 L ${futureX(corrFutMid*0.80)},${scaleY(triD_y)}
-                 L ${futureX(corrFutMid)},${scaleY(triE_y)}`,
-                '#cc88ff', '1.4', '3,5', '0.75');
+            // ── 4. Running Flat (B spikes high, C fails to complete) ──────────
+            const rf_A = futureX(T*0.78), rf_B = futureX(T*0.86), rf_C = futureX(T*0.95);
+            const rfAy = corrTop - corrRange * 0.22;
+            const runFlatPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${rf_A},${scaleY(rfAy)} L ${rf_B},${scaleY(runF_B_y)} L ${rf_C},${scaleY(runF_C_y)}`,
+                'rgba(255,128,0,1)', '1.5', '4,6', '0.76');
+            const rfLbl = slbl(rf_A, rfAy,       'A','rgba(255,128,0,0.9)', false)
+                        + slbl(rf_B, runF_B_y,   'B','rgba(255,128,0,0.9)', true)
+                        + slbl(rf_C, runF_C_y,   'C','rgba(255,128,0,0.9)', false);
 
+            // ── 5. Irregular Flat (B high, C very deep ~90%) ──────────────────
+            const if_A = futureX(T*0.97), if_B = futureX(T*1.05), if_C = futureX(T*1.14);
+            const ifAy = corrTop - corrRange * 0.28;
+            const irrFlatPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${if_A},${scaleY(ifAy)} L ${if_B},${scaleY(irrF_B_y)} L ${if_C},${scaleY(irrF_C_y)}`,
+                'rgba(255,60,60,1)', '1.5', '3,6', '0.72');
+            const ifLbl = slbl(if_A, ifAy,       'A','rgba(255,60,60,0.9)', false)
+                        + slbl(if_B, irrF_B_y,   'B','rgba(255,60,60,0.9)', true)
+                        + slbl(if_C, irrF_C_y,   'C','rgba(255,60,60,0.9)', false);
+
+            // ── 6. Contracting Triangle A-B-C-D-E (converging) ───────────────
+            const ct_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.45, T*0.53];
+            const ctPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(ct_ts[1])},${scaleY(triA_y)} L ${futureX(ct_ts[2])},${scaleY(triB_y)} L ${futureX(ct_ts[3])},${scaleY(triC_y)} L ${futureX(ct_ts[4])},${scaleY(triD_y)} L ${futureX(ct_ts[5])},${scaleY(triE_y)}`,
+                'rgba(180,100,255,1)', '1.6', '3,5', '0.82');
+            const ctLbl = slbl(futureX(ct_ts[1]), triA_y, 'A','rgba(180,100,255,0.95)', true)
+                        + slbl(futureX(ct_ts[2]), triB_y, 'B','rgba(180,100,255,0.95)', false)
+                        + slbl(futureX(ct_ts[3]), triC_y, 'C','rgba(180,100,255,0.95)', true)
+                        + slbl(futureX(ct_ts[4]), triD_y, 'D','rgba(180,100,255,0.95)', false)
+                        + slbl(futureX(ct_ts[5]), triE_y, 'E','rgba(180,100,255,0.95)', true);
+
+            // ── 7. Running Triangle (net-upward slant A-B-C-D-E) ─────────────
+            const rtA_y = corrTop, rtB_y = corrTop-corrRange*0.25, rtC_y = corrTop+corrRange*0.05,
+                  rtD_y = corrTop-corrRange*0.15, rtE_y = corrTop+corrRange*0.02;
+            const rt_ts = [T*0.55, T*0.63, T*0.71, T*0.79, T*0.87, T*0.94];
+            const runTriPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(rt_ts[1])},${scaleY(rtA_y)} L ${futureX(rt_ts[2])},${scaleY(rtB_y)} L ${futureX(rt_ts[3])},${scaleY(rtC_y)} L ${futureX(rt_ts[4])},${scaleY(rtD_y)} L ${futureX(rt_ts[5])},${scaleY(rtE_y)}`,
+                'rgba(140,200,255,1)', '1.5', '4,6', '0.75');
+            const rtLbl = slbl(futureX(rt_ts[1]), rtA_y, 'A','rgba(140,200,255,0.9)', true)
+                        + slbl(futureX(rt_ts[2]), rtB_y, 'B','rgba(140,200,255,0.9)', false)
+                        + slbl(futureX(rt_ts[3]), rtC_y, 'C','rgba(140,200,255,0.9)', true)
+                        + slbl(futureX(rt_ts[4]), rtD_y, 'D','rgba(140,200,255,0.9)', false)
+                        + slbl(futureX(rt_ts[5]), rtE_y, 'E','rgba(140,200,255,0.9)', true);
+
+            // ── 8. Barrier Triangle (horizontal upper boundary) ───────────────
+            const btA_y = corrTop, btB_y = corrTop-corrRange*0.45, btC_y = corrTop,
+                  btD_y = corrTop-corrRange*0.28, btE_y = corrTop;
+            const bt_ts = [T*0.96, T*1.04, T*1.11, T*1.18, T*1.25, T*1.32];
+            const barTriPath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(bt_ts[1])},${scaleY(btA_y)} L ${futureX(bt_ts[2])},${scaleY(btB_y)} L ${futureX(bt_ts[3])},${scaleY(btC_y)} L ${futureX(bt_ts[4])},${scaleY(btD_y)} L ${futureX(bt_ts[5])},${scaleY(btE_y)}`,
+                'rgba(100,220,180,1)', '1.5', '3,7', '0.72');
+            const btLbl = slbl(futureX(bt_ts[1]), btA_y, 'A','rgba(100,220,180,0.9)', true)
+                        + slbl(futureX(bt_ts[2]), btB_y, 'B','rgba(100,220,180,0.9)', false)
+                        + slbl(futureX(bt_ts[3]), btC_y, 'C','rgba(100,220,180,0.9)', true)
+                        + slbl(futureX(bt_ts[4]), btD_y, 'D','rgba(100,220,180,0.9)', false)
+                        + slbl(futureX(bt_ts[5]), btE_y, 'E','rgba(100,220,180,0.9)', true);
+
+            // ── 9. Double Three W-X-Y ─────────────────────────────────────────
+            const t3W_y = corrTop-corrRange*0.38, t3X1_y = corrTop-corrRange*0.18,
+                  t3Y_y = corrTop-corrRange*0.56;
+            const db_ts = [T*0.05, T*0.16, T*0.26, T*0.36, T*0.46];
             const dblPath = mkPath(
-                `M ${scaleX(len-1)},${scaleY(currentPrice)}
-                 L ${futureX(corrFutMid*0.18)},${scaleY(w5_0618)}
-                 L ${futureX(corrFutMid*0.35)},${scaleY(dblX1_y)}
-                 L ${futureX(corrFutMid*0.52)},${scaleY(dblX_y)}
-                 L ${futureX(corrFutEnd*0.85)},${scaleY(dblY_y)}`,
-                'var(--neon-pink)', '1.4', '2,5', '0.7');
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(db_ts[1])},${scaleY(t3W_y)} L ${futureX(db_ts[2])},${scaleY(t3X1_y)} L ${futureX(db_ts[3])},${scaleY(t3Y_y)} L ${futureX(db_ts[4])},${scaleY(dblY_y)}`,
+                'rgba(255,20,147,1)', '1.6', '5,5', '0.78');
+            const dbLbl = slbl(futureX(db_ts[1]), t3W_y,  'W','rgba(255,20,147,0.95)', false)
+                        + slbl(futureX(db_ts[2]), t3X1_y, 'X','rgba(255,20,147,0.95)', true)
+                        + slbl(futureX(db_ts[3]), t3Y_y,  'Y','rgba(255,20,147,0.95)', false)
+                        + slbl(futureX(db_ts[4]), dblY_y, '⊣','rgba(255,20,147,0.95)', false);
 
-            // Wave labels
+            // ── 10. Triple Three W-X-Y-X-Z ───────────────────────────────────
+            const t3X2_y = corrTop-corrRange*0.38, t3Z_y = Math.max(corrTop-corrRange*0.75, corrBase*1.01);
+            const t3_ts = [T*0.48, T*0.57, T*0.66, T*0.74, T*0.83, T*0.92];
+            const triThreePath = mkPath(
+                `M ${scaleX(len-1)},${scaleY(currentPrice)} L ${futureX(t3_ts[1])},${scaleY(t3W_y)} L ${futureX(t3_ts[2])},${scaleY(t3X1_y)} L ${futureX(t3_ts[3])},${scaleY(t3Y_y)} L ${futureX(t3_ts[4])},${scaleY(t3X2_y)} L ${futureX(t3_ts[5])},${scaleY(t3Z_y)}`,
+                'rgba(255,120,200,1)', '1.4', '2,6', '0.70');
+            const t3Lbl = slbl(futureX(t3_ts[1]), t3W_y,  'W', 'rgba(255,120,200,0.9)', false)
+                        + slbl(futureX(t3_ts[2]), t3X1_y, 'X', 'rgba(255,120,200,0.9)', true)
+                        + slbl(futureX(t3_ts[3]), t3Y_y,  'Y', 'rgba(255,120,200,0.9)', false)
+                        + slbl(futureX(t3_ts[4]), t3X2_y, 'X²','rgba(255,120,200,0.9)', true)
+                        + slbl(futureX(t3_ts[5]), t3Z_y,  'Z', 'rgba(255,120,200,0.9)', false);
+
+            // Wave labels + correction sub-wave letters
             const labelsHtml = `
                 <text x="${scaleX(w0.idx)+4}" y="${scaleY(w0.val)+15}" fill="var(--neon-green)" font-size="11" font-weight="bold">(0)</text>
                 <text x="${scaleX(w1.idx)+4}" y="${scaleY(w1.val)-8}" fill="var(--neon-green)" font-size="11" font-weight="bold">(I)</text>
@@ -935,52 +1067,81 @@ document.addEventListener('DOMContentLoaded', () => {
                 <text x="${scaleX(sub3.idx)+3}" y="${scaleY(sub3.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">iii</text>
                 <text x="${scaleX(sub4.idx)+3}" y="${scaleY(sub4.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">iv</text>
                 <text x="${scaleX(sub5.idx)-14}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
-                <text x="${futureX(corrFutEnd) - 48}" y="${scaleY(czC_y)+13}" fill="rgba(255,80,80,0.85)" font-size="9">Zig C</text>
-                <text x="${futureX(corrFutEnd) - 48}" y="${scaleY(cfC_y)-4}" fill="rgba(255,170,0,0.85)" font-size="9">Flat C</text>
-                <text x="${futureX(corrFutEnd) - 56}" y="${scaleY(cxC_y)+13}" fill="rgba(255,224,0,0.85)" font-size="9">ExpFlat</text>
-                <text x="${futureX(corrFutMid) - 48}" y="${scaleY(triE_y)+13}" fill="rgba(204,136,255,0.85)" font-size="9">Tri E</text>
-                <text x="${futureX(corrFutEnd*0.85) - 50}" y="${scaleY(dblY_y)+13}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
+                ${zzLbl}${flLbl}${xfLbl}${rfLbl}${ifLbl}${ctLbl}${rtLbl}${btLbl}${dbLbl}${t3Lbl}
             `;
 
-            // ── Targets Table (right corner) ────────────────────────────────────
-            const tblW = 214, tblH = 196, tblY = 8;
+            // ── Targets Table (right corner) — comprehensive all-pattern ──────
+            const tblW = 232, tblH = 390, tblY = 8;
             const tblX = Math.max(width - tblW - 8, 2);
             const row  = (y, label, val, color, bold) =>
               `<text x="${tblX+8}" y="${tblY+y}" fill="${color}"
-                font-size="${bold?'10.5':'9'}" font-weight="${bold?'bold':'normal'}">${label}</text>
+                font-size="${bold?'10':'9'}" font-weight="${bold?'bold':'normal'}">${label}</text>
                <text x="${tblX+tblW-8}" y="${tblY+y}" fill="${color}"
-                font-size="${bold?'10.5':'9'}" font-weight="bold" text-anchor="end">${val}</text>`;
+                font-size="${bold?'10':'9'}" font-weight="bold" text-anchor="end">${val}</text>`;
 
             const legendHtml = `
               <g>
                 <rect x="${tblX}" y="${tblY}" width="${tblW}" height="${tblH}"
-                      fill="rgba(0,0,0,0.75)" rx="5" stroke="rgba(0,240,255,0.35)" stroke-width="1"/>
+                      fill="rgba(0,0,0,0.82)" rx="5" stroke="rgba(0,240,255,0.35)" stroke-width="1"/>
                 <text x="${tblX+tblW/2}" y="${tblY+16}" fill="rgba(0,240,255,1)"
                       font-size="11" font-weight="bold" text-anchor="middle">⚡ PRICE TARGETS</text>
                 <line x1="${tblX+6}" y1="${tblY+20}" x2="${tblX+tblW-6}" y2="${tblY+20}"
                       stroke="rgba(0,240,255,0.4)" stroke-width="1"/>
 
-                <text x="${tblX+8}" y="${tblY+33}" fill="rgba(57,255,20,0.85)"
-                      font-size="9" font-weight="bold">── WAVE (V) UPSIDE TARGETS ──</text>
-                ${row(46,  '▶ Min  (0.618×W1)', '$'+w5_0618.toFixed(2),  'rgba(57,255,20,1)',   true)}
-                ${row(59,  '▶ Base (1.0×W1)',   '$'+w5_equal.toFixed(2), 'rgba(0,240,255,1)',   true)}
-                ${row(72,  '▶ Ext  (1.618×W1)', '$'+w5_1618.toFixed(2),  'rgba(255,215,0,1)',   true)}
-                ${row(85,  '▶ Rare (2.618×W1)', '$'+w5_2618.toFixed(2),  'rgba(255,170,0,0.8)', false)}
+                <text x="${tblX+8}" y="${tblY+32}" fill="rgba(57,255,20,0.85)"
+                      font-size="9" font-weight="bold">── WAVE (V) UPSIDE ──</text>
+                ${row(44,  '▶ Min  (0.618×W1)', '$'+w5_0618.toFixed(2),  'rgba(57,255,20,1)',   true)}
+                ${row(56,  '▶ Base (1.0×W1)',   '$'+w5_equal.toFixed(2), 'rgba(0,240,255,1)',   true)}
+                ${row(68,  '▶ Ext  (1.618×W1)', '$'+w5_1618.toFixed(2),  'rgba(255,215,0,1)',   true)}
+                ${row(80,  '▶ Rare (2.618×W1)', '$'+w5_2618.toFixed(2),  'rgba(255,170,0,0.8)', false)}
 
-                <line x1="${tblX+6}" y1="${tblY+92}" x2="${tblX+tblW-6}" y2="${tblY+92}"
+                <line x1="${tblX+6}" y1="${tblY+88}" x2="${tblX+tblW-6}" y2="${tblY+88}"
                       stroke="rgba(255,50,50,0.4)" stroke-width="1"/>
-                <text x="${tblX+8}" y="${tblY+103}" fill="rgba(255,80,80,0.85)"
-                      font-size="9" font-weight="bold">── CORRECTION DOWNSIDE ──</text>
-                ${row(116, '● Zigzag C (61.8%)',   '$'+czC_y.toFixed(2),  'rgba(255,80,80,1)',    true)}
-                ${row(129, '● Flat C   (~W4)',     '$'+cfC_y.toFixed(2),  'rgba(255,170,0,1)',    true)}
-                ${row(142, '● Exp.Flat (61.8%)',   '$'+cxC_y.toFixed(2),  'rgba(255,224,0,0.9)', true)}
-                ${row(155, '● Triangle E',         '$'+triE_y.toFixed(2), 'rgba(204,136,255,1)',  false)}
-                ${row(168, '● DblZigzag Y',        '$'+dblY_y.toFixed(2), 'rgba(255,20,147,0.9)',false)}
+                <text x="${tblX+8}" y="${tblY+99}" fill="rgba(255,80,80,0.9)"
+                      font-size="9" font-weight="bold">── ABC CORRECTIONS ──</text>
+                ${row(111, '● Zigzag (61.8%)',      '$'+czC_y.toFixed(2),  'rgba(255,80,80,1)',    true)}
+                ${row(122, '● Flat (shallow)',       '$'+cfC_y.toFixed(2),  'rgba(255,170,0,1)',    true)}
+                ${row(133, '● Expanded Flat (79%)', '$'+cxC_y.toFixed(2),  'rgba(255,224,0,0.95)', true)}
+                ${row(144, '● Running Flat (30%)',  '$'+runF_C_y.toFixed(2),'rgba(255,128,0,0.9)', false)}
+                ${row(155, '● Irregular Flat (90%)','$'+irrF_C_y.toFixed(2),'rgba(255,60,60,0.9)', false)}
 
-                <line x1="${tblX+6}" y1="${tblY+176}" x2="${tblX+tblW-6}" y2="${tblY+176}"
+                <line x1="${tblX+6}" y1="${tblY+163}" x2="${tblX+tblW-6}" y2="${tblY+163}"
+                      stroke="rgba(180,100,255,0.35)" stroke-width="1"/>
+                <text x="${tblX+8}" y="${tblY+174}" fill="rgba(180,100,255,0.88)"
+                      font-size="9" font-weight="bold">── TRIANGLES (ABCDE) ──</text>
+                ${row(186, '● Contracting Tri E',  '$'+triE_y.toFixed(2), 'rgba(180,100,255,1)',  true)}
+                ${row(197, '● Running Triangle E', '$'+rtE_y.toFixed(2),  'rgba(140,200,255,0.9)',false)}
+                ${row(208, '● Barrier Triangle E', '$'+btE_y.toFixed(2),  'rgba(100,220,180,0.9)',false)}
+
+                <line x1="${tblX+6}" y1="${tblY+216}" x2="${tblX+tblW-6}" y2="${tblY+216}"
+                      stroke="rgba(255,20,147,0.35)" stroke-width="1"/>
+                <text x="${tblX+8}" y="${tblY+227}" fill="rgba(255,20,147,0.88)"
+                      font-size="9" font-weight="bold">── COMPLEX (WXY/WXYXZ) ──</text>
+                ${row(239, '● Double Three (WXY)',  '$'+dblY_y.toFixed(2), 'rgba(255,20,147,1)',   true)}
+                ${row(250, '● Triple Three (Z)',    '$'+t3Z_y.toFixed(2),  'rgba(255,120,200,0.9)',false)}
+
+                <line x1="${tblX+6}" y1="${tblY+259}" x2="${tblX+tblW-6}" y2="${tblY+259}"
+                      stroke="rgba(255,255,100,0.25)" stroke-width="1"/>
+                <text x="${tblX+8}" y="${tblY+270}" fill="rgba(255,215,0,0.8)"
+                      font-size="9" font-weight="bold">── DIAGONALS ──</text>
+                ${row(282, '● Contracting Diag E', '$'+(corrTop-corrRange*0.18).toFixed(2), 'rgba(255,215,0,0.85)', false)}
+                ${row(293, '● Expanding Diag E',   '$'+(corrTop-corrRange*0.35).toFixed(2), 'rgba(255,165,0,0.85)', false)}
+
+                <line x1="${tblX+6}" y1="${tblY+301}" x2="${tblX+tblW-6}" y2="${tblY+301}"
                       stroke="rgba(0,240,255,0.15)" stroke-width="1"/>
-                <text x="${tblX+tblW/2}" y="${tblY+188}" fill="rgba(255,255,255,0.35)"
-                      font-size="7" text-anchor="middle">W1=$${w1.val.toFixed(2)} | W4=$${w4.val.toFixed(2)} | W1H=${wave1H.toFixed(2)}</text>
+                <text x="${tblX+8}" y="${tblY+312}" fill="rgba(255,80,80,0.8)"
+                      font-size="8" font-weight="bold">MOST PROBABLE:</text>
+                ${row(324, '  Zigzag 61.8% ret',   '$'+czC_y.toFixed(2),  'rgba(255,80,80,0.95)',  true)}
+                <text x="${tblX+8}" y="${tblY+337}" fill="rgba(255,170,0,0.8)"
+                      font-size="8" font-weight="bold">ALTERNATE:</text>
+                ${row(349, '  Flat (shallow)',      '$'+cfC_y.toFixed(2),  'rgba(255,170,0,0.95)',  true)}
+
+                <line x1="${tblX+6}" y1="${tblY+358}" x2="${tblX+tblW-6}" y2="${tblY+358}"
+                      stroke="rgba(0,240,255,0.12)" stroke-width="1"/>
+                <text x="${tblX+tblW/2}" y="${tblY+370}" fill="rgba(255,255,255,0.28)"
+                      font-size="7" text-anchor="middle">W4=$${w4.val.toFixed(2)} | W1H=${wave1H.toFixed(2)} | range=$${corrRange.toFixed(2)}</text>
+                <text x="${tblX+tblW/2}" y="${tblY+381}" fill="rgba(255,255,255,0.22)"
+                      font-size="7" text-anchor="middle">corrTop=$${corrTop.toFixed(2)} | base=$${corrBase.toFixed(2)}</text>
               </g>`;
 
             // Render order: fib + channel → sub-waves → corrections → impulse → labels+table
@@ -989,8 +1150,13 @@ document.addEventListener('DOMContentLoaded', () => {
             svg.appendChild(zigzagPath);
             svg.appendChild(flatPath);
             svg.appendChild(expFlatPath);
-            svg.appendChild(triPath);
+            svg.appendChild(runFlatPath);
+            svg.appendChild(irrFlatPath);
+            svg.appendChild(ctPath);
+            svg.appendChild(runTriPath);
+            svg.appendChild(barTriPath);
             svg.appendChild(dblPath);
+            svg.appendChild(triThreePath);
             svg.appendChild(ewPath);
             svg.innerHTML += labelsHtml + legendHtml;
 
