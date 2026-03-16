@@ -552,9 +552,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const w4MaxRetrace = w3.val - wave3HFinal * 0.786;
             if (w4.val < w4MaxRetrace) w4.val = w4MaxRetrace;
 
-            // W5 target: project using Fibonacci (default 0.618 × W1, or equal W1)
-            const w5TargetVal = w4.val + (wave1H * 0.618);
-            const w5ext1618 = w4.val + wave1H * 1.618; // extended W5
+            // ─── Wave V Fibonacci Targets (multiple scenarios) ──────────────────
+            const currentPrice = prices[len - 1]; // latest real price bar
+            const w5_0618   = w4.val + wave1H * 0.618;  // W5 = 0.618 × W1 (minimum)
+            const w5_equal  = w4.val + wave1H * 1.0;    // W5 = W1 (common)
+            const w5_1618   = w4.val + wave1H * 1.618;  // W5 = 1.618 × W1 (extended)
+            const w5_2618   = w4.val + wave1H * 2.618;  // W5 = 2.618 × W1 (rare extension)
+            const w5TargetVal = w5_0618; // primary target for layout
+            const w5ext1618   = w5_1618; // extended target
 
             // ─── Sub-waves inside Wave III (aligned to real price data) ──────────────
             // Find actual local pivots within [w2.idx, w3.idx] for i,ii,iii,iv,v
@@ -574,46 +579,54 @@ document.addEventListener('DOMContentLoaded', () => {
             if (sub4.val <= sub2.val) sub4.val = sub2.val + (sub3.val - sub2.val) * 0.1;
             if (sub4.val >= sub3.val) sub4.val = sub3.val - (sub3.val - sub2.val) * 0.1;
 
-            // ─── Corrective patterns after W5 ───────────────────────────────────────
-            // Use last 25% of data for corrections, starting from w3
-            const corrStart = w3.idx;
-            const corrLen   = len - corrStart;
-            const corrW5x   = w5e.idx; // W5 termination = correction start
+            // ─── Forward projection coordinates (beyond last bar = future) ─────────
+            // We extrapolate future x-positions past the right edge of the chart.
+            // Each future 'slot' = avg spacing between bars extended further right.
+            const barW = (width - padding * 2) / (len - 1); // pixels per bar
+            const futureX = (futSlots) => scaleX(len - 1) + futSlots * barW;
 
-            // Zigzag A-B-C (5-3-5): sharp corrective, C extends past A low
-            const czA = { idx: corrW5x, val: w5TargetVal };
-            const czB_end = corrW5x + Math.floor(corrLen * 0.38);
-            const czB = { idx: Math.min(czB_end, len - 1), val: w5TargetVal - (w5TargetVal - w4.val) * 0.35 };
-            const czC = { idx: len - 1, val: Math.max(w4.val - (w5TargetVal - w4.val) * 0.3, minPrice * 1.02) };
+            // W5 draw: from current price (last bar) toward each W5 target level
+            // The primary impulse already walked W0→W4. Now project W4→W5 targets forward.
+            // currentPrice is the live price; project upward to W5 targets.
+            // Use fractional future slots so targets spread right at roughly equal spacing.
+            const futW5_primary  = 40;  // ~40 bars ahead for primary target (0.618xW1)
+            const futW5_equal    = 60;
+            const futW5_extended = 90;
+            const futW5_rare     = 130;
 
-            // Flat (3-3-5): B retraces ~100% of A, C ends near A end
-            const cfB = { idx: czB.idx, val: w5TargetVal * 0.995 }; // B retraces ~100% of A
-            const cfC = { idx: len - 1,  val: w4.val - (w5TargetVal - w4.val) * 0.05 };
+            // ─── Corrective patterns (start from END of current data) ────────────────
+            // All corrections start at the current last bar (where price is NOW),
+            // then project rightward into future time.
+            const corrOriginX = len - 1;  // x-start: last real price bar
+            const corrOriginY = currentPrice; // y-start: current real price
 
-            // Expanded Flat: B > A start, C extends sharply below A
-            const cxB = { idx: czB.idx, val: w5TargetVal * 1.03 };   // B exceeds W5 high
-            const cxC = { idx: len - 1,  val: w4.val - (w5TargetVal - w4.val) * 0.618 };
+            // Future slot counts for correction patterns
+            const corrFutMid = 55;   // future midpoint of correction
+            const corrFutEnd = 110;  // future end of correction
 
-            // Triangle (3-3-3-3-3) ABCDE converging
-            const triSpan = Math.floor(corrLen * 0.8);
-            const triA_y = w5TargetVal, triB_y = czB.val;
+            // Zigzag A-B-C: A = current high (W5 primary target), B=bounce, C=low
+            const czB_y = w5_0618 - (w5_0618 - w4.val) * 0.38;
+            const czC_y = Math.max(w4.val - (w5_0618 - w4.val) * 0.3, minPrice * 1.02);
+
+            // Flat: B retraces ~100% of A, C shallow
+            const cfB_y = w5_0618 * 0.994;
+            const cfC_y = w4.val - (w5_0618 - w4.val) * 0.06;
+
+            // Expanded Flat: B > wave 5 high, C deep
+            const cxB_y = w5_0618 * 1.03;
+            const cxC_y = w4.val - (w5_0618 - w4.val) * 0.618;
+
+            // Triangle ABCDE converging
+            const triA_y = w5_0618;
+            const triB_y = czB_y;
             const triC_y = triA_y - (triA_y - triB_y) * 0.72;
-            const triD_y = triB_y + (triA_y - triB_y) * 0.3;
+            const triD_y = triB_y + (triA_y - triB_y) * 0.30;
             const triE_y = triC_y + (triC_y - triD_y) * 0.4;
-            const triA = { idx: corrW5x, val: triA_y };
-            const triB = { idx: corrW5x + Math.floor(triSpan * 0.22), val: triB_y };
-            const triC = { idx: corrW5x + Math.floor(triSpan * 0.44), val: triC_y };
-            const triD = { idx: corrW5x + Math.floor(triSpan * 0.66), val: triD_y };
-            const triE = { idx: corrW5x + Math.floor(triSpan * 0.88), val: triE_y };
 
-            // Double Zigzag (WXY)
-            const wXmid = corrW5x + Math.floor(corrLen * 0.18);
-            const wXend = corrW5x + Math.floor(corrLen * 0.35);
-            const wYend = len - 1;
-            const dblW  = { idx: corrW5x, val: w5TargetVal };
-            const dblX1 = { idx: wXmid,   val: w5TargetVal - (w5TargetVal - w4.val) * 0.55 };
-            const dblX  = { idx: wXend,   val: w5TargetVal - (w5TargetVal - w4.val) * 0.22 };
-            const dblY  = { idx: wYend,   val: Math.max(w4.val - (w5TargetVal - w4.val) * 0.55, minPrice * 1.02) };
+            // Double Zigzag WXY
+            const dblX1_y = w5_0618 - (w5_0618 - w4.val) * 0.55;
+            const dblX_y  = w5_0618 - (w5_0618 - w4.val) * 0.22;
+            const dblY_y  = Math.max(w4.val - (w5_0618 - w4.val) * 0.55, minPrice * 1.02);
 
             // ─── SVG Drawing ─────────────────────────────────────────────────────────
             // Fibonacci horizontal levels
@@ -650,55 +663,126 @@ document.addEventListener('DOMContentLoaded', () => {
             subWavePath.setAttribute('fill', 'none');
             subWavePath.setAttribute('opacity', '0.9');
 
-            // Primary 5-wave impulse path
+            // Primary 5-wave impulse (historical portion W0→W4 solid, W4→W5 dashed forward)
             const ewPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            const ewD = `M ${scaleX(w0.idx)},${scaleY(w0.val)} L ${scaleX(w1.idx)},${scaleY(w1.val)} L ${scaleX(w2.idx)},${scaleY(w2.val)} L ${scaleX(w3.idx)},${scaleY(w3.val)} L ${scaleX(w4.idx)},${scaleY(w4.val)} L ${scaleX(w5e.idx)},${scaleY(w5TargetVal)}`;
+            const ewD = `M ${scaleX(w0.idx)},${scaleY(w0.val)} L ${scaleX(w1.idx)},${scaleY(w1.val)} L ${scaleX(w2.idx)},${scaleY(w2.val)} L ${scaleX(w3.idx)},${scaleY(w3.val)} L ${scaleX(w4.idx)},${scaleY(w4.val)}`;
             ewPath.setAttribute('d', ewD);
             ewPath.setAttribute('stroke', 'var(--neon-green)');
             ewPath.setAttribute('stroke-width', '2.5');
             ewPath.setAttribute('fill', 'none');
 
-            // Scenario 1 – Zigzag (neon-red dashed)
+            // ── Wave V Projection lines (from W4 bottom → each future target) ──────
+            // These extend PAST the right edge of the chart as forward-looking arrows
+            const w5ProjectHtml = `
+              <defs>
+                <marker id="arrowGreen" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(57,255,20,0.9)"/>
+                </marker>
+                <marker id="arrowCyan" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0,240,255,0.9)"/>
+                </marker>
+              </defs>
+
+              <!-- W5 Primary (0.618xW1): bright green solid arrow -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${Math.min(futureX(futW5_primary), width - 5)}" y2="${scaleY(w5_0618)}"
+                    stroke="rgba(57,255,20,0.9)" stroke-width="2.5" stroke-dasharray="7,4"
+                    marker-end="url(#arrowGreen)"/>
+              <text x="${Math.min(futureX(futW5_primary) - 38, width - 80)}" y="${scaleY(w5_0618) - 7}"
+                    fill="rgba(57,255,20,1)" font-size="10" font-weight="bold">(V) $${w5_0618.toFixed(2)}</text>
+
+              <!-- W5 Equal W1: cyan dashed -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${Math.min(futureX(futW5_equal), width - 5)}" y2="${scaleY(w5_equal)}"
+                    stroke="rgba(0,240,255,0.75)" stroke-width="1.8" stroke-dasharray="5,5"
+                    marker-end="url(#arrowCyan)"/>
+              <text x="${Math.min(futureX(futW5_equal) - 38, width - 80)}" y="${scaleY(w5_equal) - 7}"
+                    fill="rgba(0,240,255,0.9)" font-size="9" font-weight="bold">$${w5_equal.toFixed(2)}</text>
+
+              <!-- W5 1.618xW1: gold dashed -->
+              <line x1="${scaleX(w4.idx)}" y1="${scaleY(w4.val)}"
+                    x2="${Math.min(futureX(futW5_extended), width - 5)}" y2="${scaleY(w5_1618)}"
+                    stroke="rgba(255,215,0,0.7)" stroke-width="1.5" stroke-dasharray="4,6"/>
+              <text x="${Math.min(futureX(futW5_extended) - 50, width - 80)}" y="${scaleY(w5_1618) - 7}"
+                    fill="rgba(255,215,0,0.9)" font-size="9" font-weight="bold">Ext $${w5_1618.toFixed(2)}</text>
+
+              <!-- W5 completion zone rectangle between 0.618 and equal W1 -->
+              <rect x="${scaleX(w4.idx) + 4}" y="${scaleY(w5_equal)}"
+                    width="${Math.min(futureX(futW5_equal) - scaleX(w4.idx) - 4, width - scaleX(w4.idx))}"
+                    height="${scaleY(w5_0618) - scaleY(w5_equal)}"
+                    fill="rgba(57,255,20,0.04)" stroke="rgba(57,255,20,0.2)" stroke-width="1" stroke-dasharray="2,4"/>
+
+              <!-- Vertical 'current price' reference line -->
+              <line x1="${scaleX(len-1)}" y1="0" x2="${scaleX(len-1)}" y2="${height}"
+                    stroke="rgba(255,255,255,0.2)" stroke-width="1" stroke-dasharray="2,4"/>
+              <text x="${scaleX(len-1) + 3}" y="14" fill="rgba(255,255,255,0.5)" font-size="8">NOW</text>
+            `;
+
+            // ── Correction scenarios (all start from last real bar → project right) ─
+            // Zigzag A-B-C
             const zigzagPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            zigzagPath.setAttribute('d', `M ${scaleX(czA.idx)},${scaleY(czA.val)} L ${scaleX(czB.idx)},${scaleY(czB.val)} L ${scaleX(czC.idx)},${scaleY(czC.val)}`);
+            zigzagPath.setAttribute('d',
+              `M ${scaleX(len-1)},${scaleY(currentPrice)}
+               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
+               L ${futureX(corrFutMid * 0.7)},${scaleY(czB_y)}
+               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(czC_y)}`);
             zigzagPath.setAttribute('stroke', 'var(--neon-red)');
-            zigzagPath.setAttribute('stroke-width', '2');
+            zigzagPath.setAttribute('stroke-width', '1.8');
             zigzagPath.setAttribute('stroke-dasharray', '6,4');
             zigzagPath.setAttribute('fill', 'none');
             zigzagPath.setAttribute('opacity', '0.85');
 
-            // Scenario 2 – Flat (orange dashed)
+            // Flat A-B-C
             const flatPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            flatPath.setAttribute('d', `M ${scaleX(czA.idx)},${scaleY(czA.val)} L ${scaleX(cfB.idx)},${scaleY(cfB.val)} L ${scaleX(cfC.idx)},${scaleY(cfC.val)}`);
+            flatPath.setAttribute('d',
+              `M ${scaleX(len-1)},${scaleY(currentPrice)}
+               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
+               L ${futureX(corrFutMid * 0.7)},${scaleY(cfB_y)}
+               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(cfC_y)}`);
             flatPath.setAttribute('stroke', '#ffaa00');
-            flatPath.setAttribute('stroke-width', '1.8');
+            flatPath.setAttribute('stroke-width', '1.6');
             flatPath.setAttribute('stroke-dasharray', '8,4');
             flatPath.setAttribute('fill', 'none');
             flatPath.setAttribute('opacity', '0.8');
 
-            // Scenario 3 – Expanded Flat (yellow dashed)
+            // Expanded Flat
             const expFlatPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            expFlatPath.setAttribute('d', `M ${scaleX(czA.idx)},${scaleY(czA.val)} L ${scaleX(cxB.idx)},${scaleY(cxB.val)} L ${scaleX(cxC.idx)},${scaleY(cxC.val)}`);
+            expFlatPath.setAttribute('d',
+              `M ${scaleX(len-1)},${scaleY(currentPrice)}
+               L ${futureX(corrFutMid * 0.38)},${scaleY(w5_0618)}
+               L ${futureX(corrFutMid * 0.7)},${scaleY(cxB_y)}
+               L ${Math.min(futureX(corrFutEnd), width - 4)},${scaleY(cxC_y)}`);
             expFlatPath.setAttribute('stroke', '#ffe000');
-            expFlatPath.setAttribute('stroke-width', '1.5');
+            expFlatPath.setAttribute('stroke-width', '1.4');
             expFlatPath.setAttribute('stroke-dasharray', '4,6');
             expFlatPath.setAttribute('fill', 'none');
             expFlatPath.setAttribute('opacity', '0.7');
 
-            // Scenario 4 – Triangle ABCDE (purple dashed)
+            // Triangle ABCDE
             const triPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            triPath.setAttribute('d', `M ${scaleX(triA.idx)},${scaleY(triA.val)} L ${scaleX(triB.idx)},${scaleY(triB.val)} L ${scaleX(triC.idx)},${scaleY(triC.val)} L ${scaleX(triD.idx)},${scaleY(triD.val)} L ${scaleX(triE.idx)},${scaleY(triE.val)}`);
+            triPath.setAttribute('d',
+              `M ${scaleX(len-1)},${scaleY(currentPrice)}
+               L ${futureX(corrFutMid * 0.2)},${scaleY(triA_y)}
+               L ${futureX(corrFutMid * 0.4)},${scaleY(triB_y)}
+               L ${futureX(corrFutMid * 0.6)},${scaleY(triC_y)}
+               L ${futureX(corrFutMid * 0.8)},${scaleY(triD_y)}
+               L ${Math.min(futureX(corrFutMid), width - 4)},${scaleY(triE_y)}`);
             triPath.setAttribute('stroke', '#cc88ff');
-            triPath.setAttribute('stroke-width', '1.5');
+            triPath.setAttribute('stroke-width', '1.4');
             triPath.setAttribute('stroke-dasharray', '3,5');
             triPath.setAttribute('fill', 'none');
             triPath.setAttribute('opacity', '0.75');
 
-            // Scenario 5 – Double Zigzag WXY (pink dashed)
+            // Double Zigzag WXY
             const dblPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            dblPath.setAttribute('d', `M ${scaleX(dblW.idx)},${scaleY(dblW.val)} L ${scaleX(dblX1.idx)},${scaleY(dblX1.val)} L ${scaleX(dblX.idx)},${scaleY(dblX.val)} L ${scaleX(dblY.idx)},${scaleY(dblY.val)}`);
+            dblPath.setAttribute('d',
+              `M ${scaleX(len-1)},${scaleY(currentPrice)}
+               L ${futureX(corrFutMid * 0.18)},${scaleY(w5_0618)}
+               L ${futureX(corrFutMid * 0.35)},${scaleY(dblX1_y)}
+               L ${futureX(corrFutMid * 0.52)},${scaleY(dblX_y)}
+               L ${Math.min(futureX(corrFutEnd * 0.85), width - 4)},${scaleY(dblY_y)}`);
             dblPath.setAttribute('stroke', 'var(--neon-pink)');
-            dblPath.setAttribute('stroke-width', '1.5');
+            dblPath.setAttribute('stroke-width', '1.4');
             dblPath.setAttribute('stroke-dasharray', '2,5');
             dblPath.setAttribute('fill', 'none');
             dblPath.setAttribute('opacity', '0.7');
@@ -723,8 +807,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <text x="${scaleX(w3.idx)+4}" y="${scaleY(w3.val)-20}" fill="rgba(57,255,20,0.6)" font-size="8">${w3Ext}% of I</text>
                 <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+18}" class="ew-label" fill="var(--neon-cyan)" font-size="11">(IV)</text>
                 <text x="${scaleX(w4.idx)+4}" y="${scaleY(w4.val)+30}" fill="rgba(0,240,255,0.6)" font-size="8">${w4Ret}% retrace</text>
-                <text x="${scaleX(w5e.idx)-30}" y="${scaleY(w5TargetVal)-8}" class="ew-label" fill="var(--neon-green)" font-size="11">(V)▲</text>
-                <text x="${scaleX(w5e.idx)-30}" y="${scaleY(w5TargetVal)-20}" fill="rgba(57,255,20,0.6)" font-size="8">Tgt $${w5TargetVal.toFixed(1)}</text>
+                <text x="${scaleX(len-1)+4}" y="${scaleY(currentPrice)-8}" class="ew-label" fill="rgba(255,255,255,0.7)" font-size="10">NOW</text>
 
                 <text x="${scaleX(sub1.idx)+3}" y="${scaleY(sub1.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">i</text>
                 <text x="${scaleX(sub2.idx)+3}" y="${scaleY(sub2.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">ii</text>
@@ -732,36 +815,59 @@ document.addEventListener('DOMContentLoaded', () => {
                 <text x="${scaleX(sub4.idx)+3}" y="${scaleY(sub4.val)+13}" fill="rgba(0,240,255,0.8)" font-size="9">iv</text>
                 <text x="${scaleX(sub5.idx)-12}" y="${scaleY(sub5.val)-6}" fill="rgba(0,240,255,0.8)" font-size="9">v</text>
 
-                <text x="${scaleX(czB.idx)+3}" y="${scaleY(czB.val)-6}" fill="rgba(255,50,80,0.85)" font-size="9">B</text>
-                <text x="${scaleX(czC.idx)-18}" y="${scaleY(czC.val)+14}" fill="rgba(255,50,80,0.85)" font-size="9">Zig C</text>
-                <text x="${scaleX(cfC.idx)-30}" y="${scaleY(cfC.val)+14}" fill="rgba(255,170,0,0.85)" font-size="9">Flat C</text>
-                <text x="${scaleX(cxC.idx)-42}" y="${scaleY(cxC.val)+14}" fill="rgba(255,224,0,0.85)" font-size="9">Exp.Flat C</text>
-                <text x="${scaleX(triE.idx)+3}" y="${scaleY(triE.val)+14}" fill="rgba(204,136,255,0.85)" font-size="9">Tri E</text>
-                <text x="${scaleX(dblY.idx)-36}" y="${scaleY(dblY.val)+14}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
-
-                <text x="${scaleX(czA.idx)+3}" y="${scaleY(czA.val)-6}" fill="rgba(255,255,255,0.5)" font-size="9">A</text>
+                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 48)}" y="${scaleY(czC_y) + 14}" fill="rgba(255,50,80,0.85)" font-size="9">Zig C</text>
+                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 55)}" y="${scaleY(cfC_y) - 5}" fill="rgba(255,170,0,0.85)" font-size="9">Flat C</text>
+                <text x="${Math.min(futureX(corrFutEnd) - 4, width - 68)}" y="${scaleY(cxC_y) + 14}" fill="rgba(255,224,0,0.85)" font-size="9">Exp.Flat C</text>
+                <text x="${Math.min(futureX(corrFutMid) - 4, width - 48)}" y="${scaleY(triE_y) + 14}" fill="rgba(204,136,255,0.85)" font-size="9">Tri E</text>
+                <text x="${Math.min(futureX(corrFutEnd * 0.85) - 4, width - 60)}" y="${scaleY(dblY_y) + 14}" fill="rgba(255,20,147,0.85)" font-size="9">DblZZ Y</text>
             `;
 
-            // Correction pattern legend
+            // ── Bold Targets Table (top-right corner) ─────────────────────────────
+            const tblX = width - 218, tblY = 8, tblW = 210, tblH = 188;
+            const row = (y, label, val, color, bold) =>
+              `<text x="${tblX + 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="${bold ? 'bold' : 'normal'}">${label}</text>
+               <text x="${tblX + tblW - 8}" y="${tblY + y}" fill="${color}" font-size="${bold ? '10.5' : '9'}" font-weight="bold" text-anchor="end">${val}</text>`;
+
             const legendHtml = `
-                <g>
-                  <rect x="8" y="8" width="170" height="90" fill="rgba(0,0,0,0.55)" rx="4"/>
-                  <text x="14" y="22" fill="rgba(255,255,255,0.7)" font-size="9" font-weight="bold">CORRECTION SCENARIOS</text>
-                  <rect x="14" y="28" width="14" height="2" fill="var(--neon-red)"/>
-                  <text x="32" y="33" fill="rgba(255,80,80,0.9)" font-size="8">Zigzag (5-3-5)</text>
-                  <rect x="14" y="40" width="14" height="2" fill="#ffaa00"/>
-                  <text x="32" y="45" fill="rgba(255,170,0,0.9)" font-size="8">Flat (3-3-5)</text>
-                  <rect x="14" y="52" width="14" height="2" fill="#ffe000"/>
-                  <text x="32" y="57" fill="rgba(255,224,0,0.9)" font-size="8">Expanded Flat</text>
-                  <rect x="14" y="64" width="14" height="2" fill="#cc88ff"/>
-                  <text x="32" y="69" fill="rgba(204,136,255,0.9)" font-size="8">Triangle ABCDE</text>
-                  <rect x="14" y="76" width="14" height="2" fill="var(--neon-pink)"/>
-                  <text x="32" y="81" fill="rgba(255,20,147,0.9)" font-size="8">Double Zigzag WXY</text>
-                  <text x="14" y="94" fill="rgba(0,240,255,0.5)" font-size="7">Impulse (I-V) in green | Sub-waves i-v in cyan</text>
-                </g>
-            `;
+              <g>
+                <rect x="${tblX}" y="${tblY}" width="${tblW}" height="${tblH}"
+                      fill="rgba(0,0,0,0.72)" rx="5" stroke="rgba(0,240,255,0.3)" stroke-width="1"/>
 
-            svg.innerHTML += fibHtml + channelHtml;
+                <!-- Header -->
+                <text x="${tblX + tblW/2}" y="${tblY + 16}" fill="rgba(0,240,255,1)"
+                      font-size="11" font-weight="bold" text-anchor="middle">⚡ PRICE TARGETS</text>
+                <line x1="${tblX + 6}" y1="${tblY + 20}" x2="${tblX + tblW - 6}" y2="${tblY + 20}"
+                      stroke="rgba(0,240,255,0.4)" stroke-width="1"/>
+
+                <!-- WAVE V UPSIDE -->
+                <text x="${tblX + 8}" y="${tblY + 33}" fill="rgba(57,255,20,0.8)"
+                      font-size="9" font-weight="bold">── WAVE (V) UPSIDE TARGETS ──</text>
+                ${row(46,  '▶ Primary   (0.618×W1)', '$' + w5_0618.toFixed(2), 'rgba(57,255,20,1)', true)}
+                ${row(59,  '▶ Equal W1  (1.0×W1)',   '$' + w5_equal.toFixed(2), 'rgba(0,240,255,1)', true)}
+                ${row(72,  '▶ Extended  (1.618×W1)', '$' + w5_1618.toFixed(2), 'rgba(255,215,0,1)', true)}
+                ${row(85,  '▶ Rare Ext  (2.618×W1)', '$' + w5_2618.toFixed(2), 'rgba(255,170,0,0.8)', false)}
+
+                <!-- DIVIDER -->
+                <line x1="${tblX + 6}" y1="${tblY + 91}" x2="${tblX + tblW - 6}" y2="${tblY + 91}"
+                      stroke="rgba(255,50,50,0.4)" stroke-width="1"/>
+
+                <!-- CORRECTION DOWNSIDE -->
+                <text x="${tblX + 8}" y="${tblY + 101}" fill="rgba(255,80,80,0.8)"
+                      font-size="9" font-weight="bold">── CORRECTION DOWNSIDE ──</text>
+                ${row(114, '● Zigzag C  (38.2%)',    '$' + czC_y.toFixed(2),  'rgba(255,80,80,1)',   true)}
+                ${row(127, '● Flat C    (≈W4)',      '$' + cfC_y.toFixed(2),  'rgba(255,170,0,1)',   true)}
+                ${row(140, '● Exp.Flat C (61.8%)',   '$' + cxC_y.toFixed(2),  'rgba(255,224,0,0.9)', true)}
+                ${row(153, '● Triangle E (converge)','$' + triE_y.toFixed(2), 'rgba(204,136,255,1)', false)}
+                ${row(166, '● Dbl Zigzag Y',         '$' + dblY_y.toFixed(2), 'rgba(255,20,147,0.9)',false)}
+
+                <!-- Footer -->
+                <line x1="${tblX + 6}" y1="${tblY + 172}" x2="${tblX + tblW - 6}" y2="${tblY + 172}"
+                      stroke="rgba(0,240,255,0.2)" stroke-width="1"/>
+                <text x="${tblX + tblW/2}" y="${tblY + 183}" fill="rgba(255,255,255,0.4)"
+                      font-size="7" text-anchor="middle">Current: $${currentPrice.toFixed(2)} | W4 base: $${w4.val.toFixed(2)}</text>
+              </g>`;
+
+            svg.innerHTML += fibHtml + channelHtml + w5ProjectHtml;
             svg.appendChild(subWavePath);
             svg.appendChild(zigzagPath);
             svg.appendChild(flatPath);
